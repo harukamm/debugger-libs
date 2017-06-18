@@ -114,6 +114,8 @@
     <Compile Include="Locale.cs" />
     <Compile Include="Mono.Debugger.Soft\PointerValue.cs" />
     <Compile Include="Mono.Debugger.Soft\LocalScope.cs" />
+    <Compile Include="Mono.Debugger.Soft\LambdaValue.cs" />
+    <Compile Include="Mono.Debugger.Soft\DelayedTypeMirror.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Makefile.am" />

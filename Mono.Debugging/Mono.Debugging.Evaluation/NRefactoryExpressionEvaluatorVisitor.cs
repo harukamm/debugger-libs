@@ -908,8 +908,17 @@ namespace Mono.Debugging.Evaluation
 			return LiteralValueReference.CreateObjectLiteral (ctx, expression, ctx.Adapter.TryCast (ctx, val.Value, type.Type) != null);
 		}
 
+		public static string GetUniqueName()
+		{
+			return Guid.NewGuid().ToString("N");
+		}
+
 		public ValueReference VisitLambdaExpression (LambdaExpression lambdaExpression)
 		{
+			object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString ());
+			if (val != null)
+				return LiteralValueReference.CreateTargetObjectLiteral (ctx, expression, val);
+
 			throw NotSupported ();
 		}
 

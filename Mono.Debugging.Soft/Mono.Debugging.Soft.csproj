@@ -84,6 +84,12 @@
     <Reference Include="System.Reflection.Metadata">
       <HintPath>..\..\..\packages\System.Reflection.Metadata.1.4.2\lib\portable-net45+win8\System.Reflection.Metadata.dll</HintPath>
     </Reference>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>..\..\..\build\bin\Microsoft.CodeAnalysis.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>..\..\..\build\bin\Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <Import Project="..\Mono.Debugging.settings" />
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />

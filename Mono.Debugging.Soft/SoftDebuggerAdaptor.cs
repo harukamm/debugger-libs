@@ -26,6 +26,7 @@
 // THE SOFTWARE.
 
 using System;
+using System.Text;
 using System.Linq;
 using System.Diagnostics;
 using System.Reflection;
@@ -33,6 +34,8 @@ using System.Reflection.Emit;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 using Mono.Debugger.Soft;
 using Mono.Debugging.Backend;
@@ -327,6 +330,49 @@ namespace Mono.Debugging.Soft
 			}
 		}
 
+		private object TryExtractLambda (SoftEvaluationContext ctx, LambdaValue val, TypeMirror toType)
+		{
+			if (!val.AbleToCastTo (toType))
+				return null;
+
+			string id = Guid.NewGuid ().ToString ("N");
+			string typeName = LambdaValue.ParseFullName (toType);
+			byte [] byt = CompileLambda (id, val.Expression, typeName);
+
+			if (byt == null)
+				return null;
+
+			// asm = Assembly.Load (dll);
+			object assemblyType = ctx.Adapter.GetType (ctx, "System.Reflection.Assembly");
+			object byteArrayType = ctx.Adapter.GetType (ctx, "System.Byte[]");
+			object byteType = ctx.Adapter.GetType (ctx, "System.Byte");
+			object [] byteArrayObject = Array.ConvertAll (byt, b => ctx.Adapter.CreateValue (ctx, b));
+			object arg = ctx.Adapter.CreateArray (ctx, byteType, byteArrayObject);
+			object asm =
+				ctx.Adapter.RuntimeInvoke (ctx, assemblyType, null, "Load", new object [] { byteArrayType }, new object [] { arg });
+
+			// injectedType = asm.GetType("Toload" + id)
+			object stringType = ctx.Adapter.GetType (ctx, "System.String");
+			arg = ctx.Adapter.CreateValue (ctx, "Toload" + id);
+			object injectedType =
+				ctx.Adapter.RuntimeInvoke (ctx, assemblyType, asm, "GetType", new object [] { stringType }, new object [] { arg });
+
+			// injectedFun = injectedType.GetMethod("injected_fn")
+			object typeType = ctx.Adapter.GetType (ctx, "System.Type");
+			arg = ctx.Adapter.CreateValue (ctx, "injected_fn");
+			object injectedFun =
+				ctx.Adapter.RuntimeInvoke (ctx, typeType, injectedType, "GetMethod", new object [] { stringType }, new object [] { arg });
+
+			// object fun = injectedFun.Invoke(null, null);
+			object methodInfoType = ctx.Adapter.GetType (ctx, "System.Reflection.MethodInfo");
+			object objectType = ctx.Adapter.GetType (ctx, "System.Object");
+			object objectArrayType = ctx.Adapter.GetType (ctx, "System.Object[]");
+			object nullObject = ctx.Adapter.CreateValue (ctx, null);
+			object emptyArray = ctx.Adapter.CreateArray (ctx, objectType, new object [] { });
+			return ctx.Adapter.RuntimeInvoke (ctx, methodInfoType, injectedFun, "Invoke",
+										   new object [] { objectType, objectArrayType }, new object [] { nullObject, emptyArray });
+		}
+
 		public override object TryCast (EvaluationContext ctx, object val, object type)
 		{
 			var cx = (SoftEvaluationContext) ctx;
@@ -335,6 +381,11 @@ namespace Mono.Debugging.Soft
 
 			if (val == null)
 				return null;
+
+			if (val is LambdaValue) {
+				var lambda = TryExtractLambda (cx, (LambdaValue)val, toType);
+				return lambda;
+			}
 			
 			var valueType = GetValueType (ctx, val);
 
@@ -1448,6 +1499,71 @@ namespace Mono.Debugging.Soft
 				yield return nested;
 		}
 
+		private Compilation CreateLibraryCompilation (string assemblyName, bool enableOptimisations)
+		{
+			var options = new CSharpCompilationOptions (
+				OutputKind.DynamicallyLinkedLibrary,
+				optimizationLevel: enableOptimisations ? OptimizationLevel.Release : OptimizationLevel.Debug,
+				allowUnsafe: true);
+
+			IReadOnlyCollection<MetadataReference> _references =
+			new [] {
+					MetadataReference.CreateFromFile(typeof(Binder).GetTypeInfo().Assembly.Location)
+			};
+
+			return CSharpCompilation.Create (assemblyName, options: options)
+									.AddReferences (_references);
+		}
+
+		private byte[] CompileLambda (string id, string lambdaExpression,  string typeName)
+		{
+			string className = "Toload" + id;
+			string fileNamePrefix = "forTest";
+			string fileName = fileNamePrefix + className;
+
+			StringBuilder sb = new StringBuilder ();
+			sb.Append ("public class ");
+			sb.Append (className);
+			sb.Append ("{public static ");
+			sb.Append (typeName);
+			sb.Append (" injected_fn() {");
+			sb.Append ("return (");
+			sb.Append (lambdaExpression);
+			sb.Append (");}}");
+
+			var options = new CSharpParseOptions (kind: SourceCodeKind.Regular,
+			                                      languageVersion: LanguageVersion.Default);
+			SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText (sb.ToString (), options);
+			byte [] bytes = null;
+
+			try {
+				IEnumerable<SyntaxTree> trees = new [] { syntaxTree };
+				Compilation compilation =
+					CreateLibraryCompilation (fileName, true)
+						.AddSyntaxTrees(trees);
+
+				var stream = new System.IO.MemoryStream ();
+				var emitResult = compilation.Emit (stream);
+				if (emitResult.Success) {
+					bytes = stream.ToArray ();
+				} else {
+					foreach (var diagnostic in emitResult.Diagnostics) {
+						//Console.WriteLine (diagnostic);
+					}
+				}
+			} catch (Exception ex) {
+				//Console.WriteLine (ex);
+			}
+			return bytes;
+		}
+
+		protected override object OnCreateDelayedLambdaValue (EvaluationContext ctx, string expression)
+		{
+			var soft = (SoftEvaluationContext)ctx;
+			var type = new DelayedTypeMirror (soft.Session.VirtualMachine, expression);
+			return new LambdaValue (soft.Session.VirtualMachine, type);
+		}
+
 		public override string GetTypeName (EvaluationContext ctx, object type)
 		{
 			var tm = type as TypeMirror;
@@ -1478,6 +1594,8 @@ namespace Mono.Debugging.Soft
 				return ((StructMirror) val).Type;
 			if (val is PointerValue)
 				return ((PointerValue) val).Type;
+			if (val is LambdaValue)
+				return null;
 			if (val is PrimitiveValue) {
 				var pv = (PrimitiveValue) val;
 				if (pv.Value == null)

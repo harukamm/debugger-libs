@@ -924,6 +924,16 @@ namespace Mono.Debugging.Evaluation
 			yield break;
 		}
 
+		public object CreateDelayedLambdaValue (EvaluationContext ctx, string expression)
+		{
+			return OnCreateDelayedLambdaValue (ctx, expression);
+		}
+
+		protected virtual object OnCreateDelayedLambdaValue (EvaluationContext ctx, string expression)
+		{
+			return null;
+		}
+
 		public virtual object GetParentType (EvaluationContext ctx, object type)
 		{
 			var tt = type as Type;

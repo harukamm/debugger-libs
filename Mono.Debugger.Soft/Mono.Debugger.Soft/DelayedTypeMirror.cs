@@ -47,10 +47,15 @@ namespace Mono.Debugger.Soft
 			return false;
 		}
 
-		public bool AbleToCastTo (TypeMirror c)
+		public bool AbleToCastTo (TypeMirror t)
+		{
+			return AbleToCastTo (t.FullName);
+		}
+
+		public bool AbleToCastTo (string fullName)
 		{
 			try {
-				ParseFullName (c.FullName);
+				ParseFullName (fullName);
 				return true;
 			} catch (NotImplementedException ex) {
 				return false;
@@ -73,14 +78,19 @@ namespace Mono.Debugger.Soft
 
 		public static string ParseFullName (TypeMirror t)
 		{
+			return ParseFullName (t.FullName);
+		}
+
+		public static string ParseFullName (string fullName)
+		{
 			try {
-				return ParseFullName (t.FullName);
+				return OnParseFullName (fullName);
 			} catch (Exception ex) {
-				throw new ArgumentException ("ParseFullName");
+				return null;
 			}
 		}
 
-		private static string ParseFullName (string parsedName)
+		private static string OnParseFullName (string parsedName)
 		{
 			string nameSpace = "";
 			string name = "";

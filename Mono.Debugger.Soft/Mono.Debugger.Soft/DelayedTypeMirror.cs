@@ -47,6 +47,12 @@ namespace Mono.Debugger.Soft
 			return false;
 		}
 
+		public bool IsDelayed {
+			get {
+				return true;
+			}
+		}
+
 		public bool AbleToCastTo (TypeMirror t)
 		{
 			return AbleToCastTo (t.FullName);

@@ -350,6 +350,14 @@ namespace Mono.Debugging.Soft
 			return null;
 		}
 
+		public override bool IsDelayedType (EvaluationContext ctx, object type)
+		{
+			if (type is DelayedTypeMirror)
+				return true;
+			else
+				return false;
+		}
+
 		private object TryExtractLambda (SoftEvaluationContext ctx, LambdaValue val, TypeMirror toType)
 		{
 			if (!val.AbleToCastTo (toType))
@@ -359,6 +367,11 @@ namespace Mono.Debugging.Soft
 			string typeName = LambdaValue.ParseFullName (toType);
 			byte [] byt = CompileLambda (id, val.Expression, typeName);
 
+			return ExtractLambda (ctx, id, byt);
+		}
+
+		private object ExtractLambda (SoftEvaluationContext ctx, string id, byte [] byt)
+		{
 			if (byt == null)
 				return null;
 
@@ -1618,7 +1631,7 @@ namespace Mono.Debugging.Soft
 			if (val is PointerValue)
 				return ((PointerValue) val).Type;
 			if (val is LambdaValue)
-				return null;
+				return ((LambdaValue) val).DelayedType;
 			if (val is PrimitiveValue) {
 				var pv = (PrimitiveValue) val;
 				if (pv.Value == null)
@@ -1659,6 +1672,37 @@ namespace Mono.Debugging.Soft
 			var method = OverloadResolve (soft, tm, methodName, typeArgs, types, (flags & BindingFlags.Instance) != 0, (flags & BindingFlags.Static) != 0, false);
 
 			return method != null;
+		}
+
+		public override bool ResolveDelayedType (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags, List<int> indexes, out object[] resolved)
+		{
+			var soft = (SoftEvaluationContext) ctx;
+			var tm = ToTypeMirror (ctx, targetType);
+			TypeMirror[] typeArgs = null;
+			object[] types = null;
+
+			if (genericTypeArgs != null) {
+				typeArgs = new TypeMirror [genericTypeArgs.Length];
+				for (int n = 0; n < genericTypeArgs.Length; n++)
+					typeArgs[n] = ToTypeMirror (ctx, genericTypeArgs[n]);
+			}
+
+			if (argTypes != null) {
+				types = new object[argTypes.Length];
+				for (int n = 0; n < argTypes.Length; n++)
+					if (indexes != null && indexes.Contains(n)) {
+					  if (argTypes[n] is DelayedTypeMirror)
+							types[n] = (DelayedTypeMirror) argTypes[n];
+						else
+							 throw new ArgumentException("not delayed type");
+					} else {
+						types[n] = ToTypeMirror (ctx, argTypes[n]);
+					}
+			}
+			object[] resolved2;
+			MethodMirror m = OverloadResolve (soft, tm, methodName, typeArgs, null, types, (flags & BindingFlags.Instance) != 0, (flags & BindingFlags.Static) != 0, false, true /* tryCasting */, indexes, out resolved2);
+			resolved = resolved2;
+			return m != null;
 		}
 		
 		public override bool IsExternalType (EvaluationContext ctx, object type)
@@ -1921,7 +1965,9 @@ namespace Mono.Debugging.Soft
 			for (int n = 0; n < argValues.Length; n++) {
 				var param_type = mparams[n].ParameterType;
 
-				if (param_type.FullName != types [n].FullName && !param_type.IsAssignableFrom (types [n]) && param_type.IsGenericType) {
+				if (argValues[n] is LambdaValue) {
+					values [n] = (Value)TryCast (ctx, argValues [n], param_type);
+				} else if (param_type.FullName != types [n].FullName && !param_type.IsAssignableFrom (types [n]) && param_type.IsGenericType) {
 					bool throwCastException = true;
 
 					if (method.VirtualMachine.Version.AtLeast (2, 15)) {
@@ -1987,12 +2033,17 @@ namespace Mono.Debugging.Soft
 			return types;
 		}
 
-		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror[] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting = true)
+		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, object[] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting = true)
 		{
 			return OverloadResolve (ctx, type, methodName, genericTypeArgs, null, argTypes, allowInstance, allowStatic, throwIfNotFound, tryCasting);
 		}
 
-		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror [] genericTypeArgs, TypeMirror returnType, TypeMirror [] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting)
+		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror [] genericTypeArgs, TypeMirror returnType, object [] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting)
+		{
+			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, allowInstance, allowStatic, throwIfNotFound, tryCasting, null, out _);	
+		}
+
+		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror [] genericTypeArgs, TypeMirror returnType, object [] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting, List<int> indexes, out object[] resolved)
 		{
 			const BindingFlags methodByNameFlags = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 			var cache = ctx.Session.OverloadResolveCache;
@@ -2027,13 +2078,20 @@ namespace Mono.Debugging.Soft
 						MethodMirror actualMethod;
 
 						if (argTypes != null && method.VirtualMachine.Version.AtLeast (2, 24) && method.IsGenericMethod) {
+							if (indexes != null && indexes.Count > 0)
+								throw new ArgumentException("not supported");
+
 							var generic = method.GetGenericMethodDefinition ();
 							TypeMirror [] typeArgs;
 
 							//Console.WriteLine ("Attempting to resolve generic type args for: {0}", GetPrettyMethodName (ctx, generic));
 
+							TypeMirror[] argTypes2 = new TypeMirror[argTypes.Length];
+							for (int x = 0; x < argTypes.Length; x++)
+								argTypes2[x] = (TypeMirror) argTypes[x];
+
 							if ((genericTypeArgs == null || genericTypeArgs.Length == 0))
-								typeArgs = ResolveGenericTypeArguments (generic, argTypes);
+								typeArgs = ResolveGenericTypeArguments (generic, argTypes2);
 							else
 								typeArgs = genericTypeArgs;
 
@@ -2067,23 +2125,45 @@ namespace Mono.Debugging.Soft
 					currentType = currentType.BaseType;
 			}
 
-			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, candidates, throwIfNotFound, tryCasting);
+			object[] resolved2;
+			MethodMirror m = OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, candidates, throwIfNotFound, indexes, out resolved2, tryCasting);
+			resolved = resolved2;
+			return m;
 		}
 
 		static bool IsApplicable (SoftEvaluationContext ctx, MethodMirror method, TypeMirror[] genericTypeArgs, TypeMirror returnType, TypeMirror[] types, out string error, out int matchCount, bool tryCasting = true)
 		{
+			return IsApplicable (ctx, method, genericTypeArgs, returnType, types, out error, out matchCount, null, out _, tryCasting);
+		}
+
+		static bool IsApplicable (SoftEvaluationContext ctx, MethodMirror method, TypeMirror[] genericTypeArgs, TypeMirror returnType, object[] types, out string error, out int matchCount, List<int> indexes, out object[] resolved, bool tryCasting = true)
+		{
 			var mparams = method.GetParameters ();
 			matchCount = 0;
+			resolved = new object[indexes == null ? 0 : indexes.Count];
+			int n = 0;
 
 			for (int i = 0; i < types.Length; i++) {
 				var param_type = mparams[i].ParameterType;
 
-				if (param_type.FullName == types[i].FullName) {
+				if (indexes != null && indexes.Contains (i)) {
+					if (DelayedTypeMirror.ParseFullName (param_type) != null) {
+						// TODO: try to compile
+						resolved [n] = param_type;
+						matchCount++;
+						n++;
+					}
+					continue;
+				}
+
+				TypeMirror tm = (TypeMirror) (types[i]);
+
+				if (param_type.FullName == tm.FullName) {
 					matchCount++;
 					continue;
 				}
 
-				if (param_type.IsAssignableFrom (types[i]))
+				if (param_type.IsAssignableFrom (tm))
 					continue;
 
 				if (param_type.IsGenericType) {
@@ -2097,10 +2177,10 @@ namespace Mono.Debugging.Soft
 					}
 				}
 
-				if (tryCasting && CanForceCast (ctx, param_type, types [i]))
+				if (tryCasting && CanForceCast (ctx, param_type, tm))
 					continue;
 
-				string fromType = !IsGeneratedType (types[i]) ? ctx.Adapter.GetDisplayTypeName (ctx, types[i]) : types[i].FullName;
+				string fromType = !IsGeneratedType (tm) ? ctx.Adapter.GetDisplayTypeName (ctx, tm) : tm.FullName;
 				string toType = ctx.Adapter.GetDisplayTypeName (ctx, param_type);
 
 				error = string.Format ("Argument {0}: Cannot implicitly convert `{1}' to `{2}'", i, fromType, toType);
@@ -2122,8 +2202,14 @@ namespace Mono.Debugging.Soft
 			return true;
 		}
 
-		static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror returnType, TypeMirror[] argTypes, List<MethodMirror> candidates, bool throwIfNotFound, bool tryCasting = true)
+		// harukam
+		static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror returnType, TypeMirror[] argTypes, List<MethodMirror> candidates, bool throwIfNotFound, bool tryCasting = true) {
+			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, candidates, throwIfNotFound, null, out _, tryCasting);
+		}
+
+		static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror returnType, object[] argTypes, List<MethodMirror> candidates, bool throwIfNotFound, List<int> indexes, out object[] resolved, bool tryCasting = true)
 		{
+      resolved = null;
 			if (candidates.Count == 0) {
 				if (throwIfNotFound) {
 					string typeName = ctx.Adapter.GetDisplayTypeName (ctx, type);
@@ -2151,9 +2237,11 @@ namespace Mono.Debugging.Soft
 			if (candidates.Count == 1) {
 				string error;
 				int matchCount;
-
-				if (IsApplicable (ctx, candidates[0], genericTypeArgs, returnType, argTypes, out error, out matchCount, tryCasting))
+				object[] resolved2;
+				if (IsApplicable (ctx, candidates[0], genericTypeArgs, returnType, argTypes, out error, out matchCount, indexes, out resolved2, tryCasting)) {
+					resolved = resolved2;
 					return candidates[0];
+				}
 
 				if (throwIfNotFound)
 					throw new EvaluatorException ("Invalid arguments for method `{0}': {1}", methodName, error);
@@ -2170,13 +2258,15 @@ namespace Mono.Debugging.Soft
 				string error;
 				int matchCount;
 				
-				if (!IsApplicable (ctx, method, genericTypeArgs, returnType, argTypes, out error, out matchCount, tryCasting))
+				object[] resolved2;
+				if (!IsApplicable (ctx, method, genericTypeArgs, returnType, argTypes, out error, out matchCount, indexes, out resolved2, tryCasting))
 					continue;
 
 				if (matchCount == bestCount) {
 					repeatedBestCount = true;
 				} else if (matchCount > bestCount) {
 					match = method;
+					resolved = resolved2;
 					bestCount = matchCount;
 					repeatedBestCount = false;
 				}

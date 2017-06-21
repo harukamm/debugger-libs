@@ -287,6 +287,7 @@ namespace Mono.Debugging.Evaluation
 		public abstract bool IsEnum (EvaluationContext ctx, object val);
 		public abstract bool IsValueType (object type);
 		public abstract bool IsClass (EvaluationContext ctx, object type);
+		public abstract bool IsDelayedType (EvaluationContext ctx, object type);
 		public abstract object TryCast (EvaluationContext ctx, object val, object type);
 
 		public abstract object GetValueType (EvaluationContext ctx, object val);
@@ -924,6 +925,18 @@ namespace Mono.Debugging.Evaluation
 			yield break;
 		}
 
+		public object[] ResolveUnknownLambdaValues (
+			EvaluationContext ctx, object type, string methodName, object [] argTypes, object [] lambdas, BindingFlags flags)
+		{
+			return OnResolveUnknownLambdaValues (ctx, type, methodName, argTypes, lambdas, flags);
+		}
+
+		protected virtual object[] OnResolveUnknownLambdaValues (
+			EvaluationContext ctx, object type, string methodName, object [] argTypes, object [] lambdas, BindingFlags flags)
+		{
+			return null;
+		}
+
 		public object CreateDelayedLambdaValue (EvaluationContext ctx, string expression)
 		{
 			return OnCreateDelayedLambdaValue (ctx, expression);
@@ -1398,6 +1411,8 @@ namespace Mono.Debugging.Evaluation
 		// argTypes can be null, meaning that it has to return true if there is any method with that name
 		// flags will only contain Static or Instance flags
 		public abstract bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags);
+
+		public abstract bool ResolveDelayedType (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags, List<int> indexes, out object[] resolved);
 
 		public object RuntimeInvoke (EvaluationContext ctx, object targetType, object target, string methodName, object[] argTypes, object[] argValues)
 		{

@@ -315,6 +315,12 @@ namespace Mono.Debugger.Soft
 			}
 		}
 
+		public bool IsDelayed {
+			get {
+				return false;
+			}
+		}
+
 		public TypeMirror GetElementType () {
 			GetInfo ();
 			if (element_type == null && info.element_type != 0)

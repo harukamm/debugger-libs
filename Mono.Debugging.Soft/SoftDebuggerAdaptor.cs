@@ -330,6 +330,26 @@ namespace Mono.Debugging.Soft
 			}
 		}
 
+		public object CreateByteArray (SoftEvaluationContext ctx, byte [] byts)
+		{
+			object arrayType = GetType (ctx, "System.Array");
+			object int32Type = GetType (ctx, "System.Int32");
+			object typeType = GetType (ctx, "System.Type");
+			object stringType = GetType (ctx, "System.String");
+			object byteTypeValue = RuntimeInvoke(ctx, typeType, null, "GetType",  new object[] { stringType }, new object[] { CreateValue (ctx, "System.Byte") });
+
+			object byteType = ctx.Adapter.GetType (ctx, "System.Byte");
+			object n = CreateValue (ctx, byts.Length);
+			object [] args = new object [] { byteTypeValue, n};
+			object arr = RuntimeInvoke (ctx, arrayType, null, "CreateInstance", new object[] { typeType, int32Type }, args);
+			if (arr is ArrayMirror) {
+				ArrayMirror arrm = arr as ArrayMirror;
+				arrm.SetByteValues (byts);
+				return arr;
+			}
+			return null;
+		}
+
 		private object TryExtractLambda (SoftEvaluationContext ctx, LambdaValue val, TypeMirror toType)
 		{
 			if (!val.AbleToCastTo (toType))
@@ -345,9 +365,12 @@ namespace Mono.Debugging.Soft
 			// asm = Assembly.Load (dll);
 			object assemblyType = ctx.Adapter.GetType (ctx, "System.Reflection.Assembly");
 			object byteArrayType = ctx.Adapter.GetType (ctx, "System.Byte[]");
-			object byteType = ctx.Adapter.GetType (ctx, "System.Byte");
-			object [] byteArrayObject = Array.ConvertAll (byt, b => ctx.Adapter.CreateValue (ctx, b));
-			object arg = ctx.Adapter.CreateArray (ctx, byteType, byteArrayObject);
+			object arg = CreateByteArray(ctx, byt);
+			if (arg == null) {
+				object byteType = ctx.Adapter.GetType (ctx, "System.Byte");
+				object [] byteArrayObject = Array.ConvertAll (byt, b => ctx.Adapter.CreateValue (ctx, b));
+				arg = ctx.Adapter.CreateArray (ctx, byteType, byteArrayObject);
+			}
 			object asm =
 				ctx.Adapter.RuntimeInvoke (ctx, assemblyType, null, "Load", new object [] { byteArrayType }, new object [] { arg });
 

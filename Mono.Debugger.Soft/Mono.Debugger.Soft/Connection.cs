@@ -2437,6 +2437,17 @@ namespace Mono.Debugger.Soft
 			SendReceive (CommandSet.ARRAY_REF, (int)CmdArrayRef.SET_VALUES, new PacketWriter ().WriteId (id).WriteInt (index).WriteInt (values.Length).WriteValues (values));
 		}
 
+		internal void ByteArray_SetValues (long id, byte[] byt) {
+			int index = 0;
+			var typ = (byte)ElementType.U1;
+			var pw = new PacketWriter ().WriteId (id).WriteInt (index).WriteInt (byt.Length);
+			for (int i = 0; i < byt.Length; i++) {
+				pw.WriteByte (typ);
+				pw.WriteInt ((int)(byt[i]));
+			}
+			SendReceive (CommandSet.ARRAY_REF, (int)CmdArrayRef.SET_VALUES, pw);
+		}
+
 		/*
 		 * STRINGS
 		 */

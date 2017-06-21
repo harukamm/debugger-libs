@@ -76,6 +76,13 @@ namespace Mono.Debugger.Soft
 			}
 		}
 
+		public void SetByteValues (byte[] byts) {
+			if (byts.Length != Length) {
+				throw new IndexOutOfRangeException ();
+			}
+			vm.conn.ByteArray_SetValues (id, byts);
+		}
+
 		public IList<Value> GetValues (int index, int length) {
 			// FIXME: Multiple dimensions
 				if (index < 0 || index > Length - length)

@@ -915,9 +915,12 @@ namespace Mono.Debugging.Evaluation
 
 		public ValueReference VisitLambdaExpression (LambdaExpression lambdaExpression)
 		{
-			object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString ());
-			if (val != null)
-				return LiteralValueReference.CreateTargetObjectLiteral (ctx, expression, val);
+			AstNode parent = lambdaExpression.Parent;
+			if (parent is InvocationExpression || parent is CastExpression) {
+				object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString ());
+				if (val != null)
+					return LiteralValueReference.CreateTargetObjectLiteral (ctx, expression, val);
+			}
 
 			throw NotSupported ();
 		}

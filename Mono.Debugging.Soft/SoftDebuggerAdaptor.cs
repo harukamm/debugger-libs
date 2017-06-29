@@ -33,6 +33,8 @@ using System.Reflection.Emit;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 using Mono.Debugger.Soft;
 using Mono.Debugging.Backend;
@@ -335,7 +337,9 @@ namespace Mono.Debugging.Soft
 
 			if (val == null)
 				return null;
-			
+			else if (val is DelayedLambdaValue)
+				return CompileAndLoadLambdaValue (cx, (DelayedLambdaValue) val, toType, out _);
+
 			var valueType = GetValueType (ctx, val);
 
 			fromType = valueType as TypeMirror;
@@ -518,6 +522,13 @@ namespace Mono.Debugging.Soft
 			return cx.Session.VirtualMachine.CreateValue (value);
 		}
 
+		public override object CreateDelayedLambdaValue (EvaluationContext ctx, string expression)
+		{
+			var soft = (SoftEvaluationContext)ctx;
+			var type = new DelayedLambdaType (soft.Session.VirtualMachine, expression);
+			return new DelayedLambdaValue (soft.Session.VirtualMachine, type);
+		}
+
 		public object CreateByteArray (EvaluationContext ctx, byte [] byts)
 		{
 			var arrayType = GetType (ctx, "System.Array");
@@ -536,6 +547,118 @@ namespace Mono.Debugging.Soft
 				return arr;
 			}
 			return null;
+		}
+
+		private object CompileAndLoadLambdaValue (SoftEvaluationContext ctx, DelayedLambdaValue val, TypeMirror toType, out string compileError)
+		{
+			if (!val.IsAcceptableType (toType)) {
+				compileError = null;
+				return null;
+			}
+
+			string id = Guid.NewGuid ().ToString ("N");
+			string className = "Lambda" + id;
+			string typeName = val.GetLiteralType (toType);
+			byte [] bytes = CompileLambdaExpression (className, val.Expression, typeName, out compileError);
+
+			return LoadLambdaValue (ctx, className, bytes);
+		}
+
+		private Compilation CreateLibraryCompilation (string assemblyName, bool enableOptimisations)
+		{
+			var options = new CSharpCompilationOptions (
+					OutputKind.DynamicallyLinkedLibrary,
+					optimizationLevel: enableOptimisations ? OptimizationLevel.Release : OptimizationLevel.Debug);
+
+			// TODO: Use assembly of debugee instead of debbuger's.
+			IReadOnlyCollection<MetadataReference> references =
+				new [] { MetadataReference.CreateFromFile (typeof (Binder).GetTypeInfo ().Assembly.Location) };
+
+			return CSharpCompilation.Create (assemblyName, options: options)
+				                    .AddReferences (references);
+		}
+
+		private byte [] CompileLambdaExpression (string className, string lambdaExpression, string typeName, out string error)
+		{
+			string assemblyNamePrefix = "lambdaAssem";
+			string assemblyName = assemblyNamePrefix + className;
+			int startOfExp, endOfExp;
+			error = null;
+
+			var sb = new System.Text.StringBuilder ();
+			sb.Append ("public class ");
+			sb.Append (className);
+			sb.Append ("{public static ");
+			sb.Append (typeName);
+			sb.Append (" injected_fn() {");
+			sb.Append ("return (");
+			startOfExp = sb.Length;
+			sb.Append (lambdaExpression);
+			endOfExp = startOfExp + lambdaExpression.Length;
+			sb.Append (");");
+			sb.Append ("}}");
+
+			var options = new CSharpParseOptions (kind: SourceCodeKind.Regular);
+			SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText (sb.ToString (), options);
+
+			try {
+				IEnumerable<SyntaxTree> trees = new [] { syntaxTree };
+				Compilation compilation = CreateLibraryCompilation (assemblyName, true).AddSyntaxTrees (trees);
+
+				var stream = new System.IO.MemoryStream ();
+				var compileResult = compilation.Emit (stream);
+				if (compileResult.Success)
+					return stream.ToArray ();
+
+				// Take an error message only if its error is due to lambda expression that is
+				// inputted by user.
+				var diagnostics = compileResult.Diagnostics;
+				var dx = diagnostics.Length != 0 ? diagnostics[0] : null;
+
+				if (dx != null && dx.Severity == DiagnosticSeverity.Error) {
+					var location = dx.Location;
+					var start = location.SourceSpan.Start;
+					var end = location.SourceSpan.End;
+					if (startOfExp <= start && end <= endOfExp)
+						error = dx.GetMessage (System.Globalization.CultureInfo.InvariantCulture);
+				}
+			} catch (Exception) {
+			}
+			return null;
+		}
+
+		private object LoadLambdaValue (SoftEvaluationContext ctx, string className, byte[] bytes)
+		{
+			if (bytes == null)
+				return null;
+
+			var assemblyType = ctx.Adapter.GetType (ctx, "System.Reflection.Assembly");
+			var byteArrayType = ctx.Adapter.GetType (ctx, "System.Byte[]");
+			var byteArrayValue = CreateByteArray (ctx, bytes);
+			var argTypes = new object[] { byteArrayType };
+			var argValues = new object[] { byteArrayValue };
+			var asm = ctx.Adapter.RuntimeInvoke (ctx, assemblyType, null, "Load", argTypes, argValues);
+
+			var stringType = ctx.Adapter.GetType (ctx, "System.String");
+			var classNameValue = ctx.Adapter.CreateValue (ctx, className);
+			argTypes = new object[] { stringType };
+			argValues = new object[] { classNameValue };
+			var injectedType = ctx.Adapter.RuntimeInvoke (ctx, assemblyType, asm, "GetType", argTypes, argValues);
+
+			var typeType = ctx.Adapter.GetType (ctx, "System.Type");
+			var methodNameValue = ctx.Adapter.CreateValue (ctx, "injected_fn");
+			argTypes = new object[] { stringType };
+			argValues = new object[] { methodNameValue };
+			var injectedFun = ctx.Adapter.RuntimeInvoke(ctx, typeType, injectedType, "GetMethod", argTypes, argValues);
+
+			var methodInfoType = ctx.Adapter.GetType (ctx, "System.Reflection.MethodInfo");
+			var objectType = ctx.Adapter.GetType (ctx, "System.Object");
+			var objectArrayType = ctx.Adapter.GetType (ctx, "System.Object[]");
+			var nullValue = ctx.Adapter.CreateValue (ctx, null);
+			var emptyArrayValue = ctx.Adapter.CreateArray (ctx, objectType, new object[] {});
+			argTypes = new object[] { objectType, objectArrayType };
+			argValues = new object[] { nullValue, emptyArrayValue };
+			return ctx.Adapter.RuntimeInvoke (ctx, methodInfoType, injectedFun, "Invoke", argTypes, argValues);
 		}
 
 		public override object GetBaseValue (EvaluationContext ctx, object val)
@@ -1512,6 +1635,8 @@ namespace Mono.Debugging.Soft
 				return ((StructMirror) val).Type;
 			if (val is PointerValue)
 				return ((PointerValue) val).Type;
+			if (val is DelayedLambdaValue)
+				return ((DelayedLambdaValue)val).DelayedType;
 			if (val is PrimitiveValue) {
 				var pv = (PrimitiveValue) val;
 				if (pv.Value == null)

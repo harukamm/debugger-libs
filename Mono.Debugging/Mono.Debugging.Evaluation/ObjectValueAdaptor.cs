@@ -414,6 +414,8 @@ namespace Mono.Debugging.Evaluation
 
 		public abstract object CreateValue (EvaluationContext ctx, object type, params object[] args);
 
+		public abstract object CreateDelayedLambdaValue (EvaluationContext ctx, string expression);
+
 		public abstract object CreateNullValue (EvaluationContext ctx, object type);
 
 		public virtual object GetBaseValue (EvaluationContext ctx, object val)

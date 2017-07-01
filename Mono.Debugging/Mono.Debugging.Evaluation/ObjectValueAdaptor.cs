@@ -287,6 +287,7 @@ namespace Mono.Debugging.Evaluation
 		public abstract bool IsEnum (EvaluationContext ctx, object val);
 		public abstract bool IsValueType (object type);
 		public abstract bool IsClass (EvaluationContext ctx, object type);
+		public abstract bool IsDelayedType (EvaluationContext ctx, object type);
 		public abstract object TryCast (EvaluationContext ctx, object val, object type);
 
 		public abstract object GetValueType (EvaluationContext ctx, object val);
@@ -1389,7 +1390,12 @@ namespace Mono.Debugging.Evaluation
 
 		// argTypes can be null, meaning that it has to return true if there is any method with that name
 		// flags will only contain Static or Instance flags
-		public abstract bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags);
+		public bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags)
+		{
+			return HasMethod (ctx, targetType, methodName, genericTypeArgs, argTypes, flags, out _);
+		}
+
+		public abstract bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object [] genericTypeArgs, object [] argTypes, BindingFlags flags, out Tuple<int, object>[] resolvedLambdaTypes);
 
 		public object RuntimeInvoke (EvaluationContext ctx, object targetType, object target, string methodName, object[] argTypes, object[] argValues)
 		{

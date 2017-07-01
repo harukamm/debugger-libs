@@ -528,6 +528,19 @@ namespace Mono.Debugging.Evaluation
 			throw ParseError ("Could not resolve type: {0}", ResolveTypeName (type));
 		}
 
+		static object[] UpdateDelayedTypes (object[] types, Tuple<int, object>[] updates, ref bool alreadyUpdated)
+		{
+			if (alreadyUpdated || types == null || updates == null || types.Length < updates.Length || updates.Length == 0)
+				return types;
+
+			for (int x = 0; x < updates.Length; x++) {
+				int index = updates[x].Item1;
+				types[index] = updates[x].Item2;
+			}
+			alreadyUpdated = true;
+			return types;
+		}
+
 		#region IAstVisitor implementation
 
 		public ValueReference VisitAnonymousMethodExpression (AnonymousMethodExpression anonymousMethodExpression)
@@ -800,6 +813,7 @@ namespace Mono.Debugging.Evaluation
 				throw new ImplicitEvaluationDisabledException ();
 
 			bool invokeBaseMethod = false;
+			bool allArgTypesAreResolved = true;
 			ValueReference target = null;
 			string methodName;
 
@@ -812,9 +826,14 @@ namespace Mono.Debugging.Evaluation
 				var vref = arg.AcceptVisitor<ValueReference> (this);
 				args[n] = vref.Value;
 				types[n] = ctx.Adapter.GetValueType (ctx, args[n]);
+
+				if (ctx.Adapter.IsDelayedType (ctx, types[n]))
+					allArgTypesAreResolved = false;
 				n++;
 			}
 			object vtype = null;
+			Tuple<int, object>[] resolvedLambdaTypes;
+
 			if (invocationExpression.Target is MemberReferenceExpression) {
 				var field = (MemberReferenceExpression) invocationExpression.Target;
 				target = field.Target.AcceptVisitor<ValueReference> (this);
@@ -842,6 +861,7 @@ namespace Mono.Debugging.Evaluation
 				} else {
 					if (ctx.Adapter.HasMethod (ctx, ctx.Adapter.GetEnclosingType (ctx), methodName, types, BindingFlags.Instance))
 						throw new EvaluatorException ("Cannot invoke an instance method from a static method.");
+
 					target = null;
 				}
 			} else {
@@ -852,9 +872,13 @@ namespace Mono.Debugging.Evaluation
 				vtype = target != null ? target.Type : ctx.Adapter.GetEnclosingType (ctx);
 			object vtarget = (target is TypeValueReference) || target == null ? null : target.Value;
 
+			var hasMethod = ctx.Adapter.HasMethod (ctx, vtype, methodName, typeArgs, types, BindingFlags.Instance | BindingFlags.Static, out resolvedLambdaTypes);
+			if (hasMethod)
+				types = UpdateDelayedTypes (types, resolvedLambdaTypes, ref allArgTypesAreResolved);
+
 			if (invokeBaseMethod) {
 				vtype = ctx.Adapter.GetBaseType (ctx, vtype);
-			} else if (target != null && !ctx.Adapter.HasMethod (ctx, vtype, methodName, typeArgs, types, BindingFlags.Instance | BindingFlags.Static)) {
+			} else if (target != null && !hasMethod) {
 				// Look for LINQ extension methods...
 				var linq = ctx.Adapter.GetType (ctx, "System.Linq.Enumerable");
 				if (linq != null) {
@@ -879,17 +903,20 @@ namespace Mono.Debugging.Evaluation
 						Array.Copy (args, 0, xargs, 1, args.Length);
 						xargs[0] = vtarget;
 
-						if (ctx.Adapter.HasMethod (ctx, linq, methodName, xtypeArgs, xtypes, BindingFlags.Static)) {
+						if (ctx.Adapter.HasMethod (ctx, linq, methodName, xtypeArgs, xtypes, BindingFlags.Static, out resolvedLambdaTypes)) {
 							vtarget = null;
 							vtype = linq;
 
 							typeArgs = xtypeArgs;
-							types = xtypes;
+							types = UpdateDelayedTypes (xtypes, resolvedLambdaTypes, ref allArgTypesAreResolved);
 							args = xargs;
 						}
 					}
 				}
 			}
+
+			if (!allArgTypesAreResolved)
+				throw NotSupported ();
 
 			object result = ctx.Adapter.RuntimeInvoke (ctx, vtype, vtarget, methodName, typeArgs, types, args);
 			if (result != null)
@@ -917,7 +944,7 @@ namespace Mono.Debugging.Evaluation
 			while (parent != null && parent is ParenthesizedExpression)
 				parent = parent.Parent;
 
-			if (parent is CastExpression) {
+			if (parent is InvocationExpression || parent is CastExpression) {
 				object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString ());
 				if (val != null)
 					return LiteralValueReference.CreateTargetObjectLiteral (ctx, expression, val);

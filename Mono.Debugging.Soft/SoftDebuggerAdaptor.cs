@@ -1655,12 +1655,12 @@ namespace Mono.Debugging.Soft
 			return tm != null ? tm.BaseType : null;
 		}
 
-		public override bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags)
+		public override bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags, out Tuple<int, object>[] resolvedLambdaTypes)
 		{
 			var soft = (SoftEvaluationContext) ctx;
 			var tm = ToTypeMirror (ctx, targetType);
 			TypeMirror[] typeArgs = null;
-			TypeMirror[] types = null;
+			object[] types = null;
 
 			if (genericTypeArgs != null) {
 				typeArgs = new TypeMirror [genericTypeArgs.Length];
@@ -1669,12 +1669,16 @@ namespace Mono.Debugging.Soft
 			}
 
 			if (argTypes != null) {
-				types = new TypeMirror [argTypes.Length];
-				for (int n = 0; n < argTypes.Length; n++)
-					types[n] = ToTypeMirror (ctx, argTypes[n]);
+				types = new object [argTypes.Length];
+				for (int n = 0; n < argTypes.Length; n++) {
+					if (argTypes[n] is DelayedLambdaType)
+						types[n] = (DelayedLambdaType) argTypes[n];
+					else
+						types[n] = ToTypeMirror (ctx, argTypes[n]);
+				}
 			}
-			
-			var method = OverloadResolve (soft, tm, methodName, typeArgs, types, (flags & BindingFlags.Instance) != 0, (flags & BindingFlags.Static) != 0, false);
+
+			var method = OverloadResolve (soft, tm, methodName, typeArgs, null, types, (flags & BindingFlags.Instance) != 0, (flags & BindingFlags.Static) != 0, false, out resolvedLambdaTypes, true);
 
 			return method != null;
 		}
@@ -1729,7 +1733,12 @@ namespace Mono.Debugging.Soft
 		{
 			return val is EnumMirror;
 		}
-		
+
+		public override bool IsDelayedType (EvaluationContext ctx, object type)
+		{
+			return type is DelayedLambdaType;
+		}
+
 		protected override TypeDisplayData OnGetTypeDisplayData (EvaluationContext ctx, object type)
 		{
 			Dictionary<string, DebuggerBrowsableState> memberData = null;
@@ -1939,7 +1948,14 @@ namespace Mono.Debugging.Soft
 			for (int n = 0; n < argValues.Length; n++) {
 				var param_type = mparams[n].ParameterType;
 
-				if (param_type.FullName != types [n].FullName && !param_type.IsAssignableFrom (types [n]) && param_type.IsGenericType) {
+				if (argValues[n] is DelayedLambdaValue) {
+					string error;
+					var val = CompileAndLoadLambdaValue (soft, (DelayedLambdaValue) argValues[n], param_type, out error);
+					values[n] = (Value) val;
+
+					if (error != null)
+						throw new EvaluatorException ("Invalid arguments for method `{0}': Argument {1}: {2}", methodName, n, error);
+				} else if (param_type.FullName != types [n].FullName && !param_type.IsAssignableFrom (types [n]) && param_type.IsGenericType) {
 					bool throwCastException = true;
 
 					if (method.VirtualMachine.Version.AtLeast (2, 15)) {
@@ -1977,7 +1993,7 @@ namespace Mono.Debugging.Soft
 			}
 		}
 
-		static TypeMirror[] ResolveGenericTypeArguments (MethodMirror method, TypeMirror[] argTypes)
+		static TypeMirror[] ResolveGenericTypeArguments (MethodMirror method, object[] argTypes)
 		{
 			var genericArgs = method.GetGenericArguments ();
 			var types = new TypeMirror[genericArgs.Length];
@@ -1990,10 +2006,13 @@ namespace Mono.Debugging.Soft
 
 			// map parameter types to generic argument types...
 			for (int i = 0; i < argTypes.Length && i < parameters.Length; i++) {
+				if (argTypes[i] is DelayedLambdaType)
+					continue;
+
 				int index = names.IndexOf (parameters[i].ParameterType.Name);
 
 				if (index != -1 && types[index] == null)
-					types[index] = argTypes[index];
+					types[index] = (TypeMirror) argTypes[index];
 			}
 
 			// make sure we have all the generic argument types...
@@ -2005,12 +2024,17 @@ namespace Mono.Debugging.Soft
 			return types;
 		}
 
-		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror[] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting = true)
+		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, object[] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting = true)
 		{
-			return OverloadResolve (ctx, type, methodName, genericTypeArgs, null, argTypes, allowInstance, allowStatic, throwIfNotFound, tryCasting);
+			return OverloadResolve (ctx, type, methodName, genericTypeArgs, null, argTypes, allowInstance, allowStatic, throwIfNotFound, out _, tryCasting);
 		}
 
-		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror [] genericTypeArgs, TypeMirror returnType, TypeMirror [] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting)
+		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror [] genericTypeArgs, TypeMirror returnType, object [] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting)
+		{
+			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, allowInstance, allowStatic, throwIfNotFound, out _, tryCasting);
+		}
+
+		public static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror returnType, object[] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, out Tuple<int, object>[] resolvedLambdaTypes, bool tryCasting)
 		{
 			const BindingFlags methodByNameFlags = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 			var cache = ctx.Session.OverloadResolveCache;
@@ -2085,23 +2109,36 @@ namespace Mono.Debugging.Soft
 					currentType = currentType.BaseType;
 			}
 
-			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, candidates, throwIfNotFound, tryCasting);
+			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, candidates, throwIfNotFound, out resolvedLambdaTypes, tryCasting);
 		}
 
-		static bool IsApplicable (SoftEvaluationContext ctx, MethodMirror method, TypeMirror[] genericTypeArgs, TypeMirror returnType, TypeMirror[] types, out string error, out int matchCount, bool tryCasting = true)
+		static bool IsApplicable (SoftEvaluationContext ctx, MethodMirror method, TypeMirror[] genericTypeArgs, TypeMirror returnType, object[] types, out string error, out int matchCount, out Tuple<int, object>[] resolvedLambdaTypes, bool tryCasting = true)
 		{
 			var mparams = method.GetParameters ();
 			matchCount = 0;
+			resolvedLambdaTypes = null;
+			List<Tuple<int, object>> lambdaTypes = new List<Tuple<int, object>> ();
 
 			for (int i = 0; i < types.Length; i++) {
 				var param_type = mparams[i].ParameterType;
 
-				if (param_type.FullName == types[i].FullName) {
+				if (types[i] is DelayedLambdaType) {
+					var lambdaType = (DelayedLambdaType) types[i];
+					if (lambdaType.IsAcceptableType (param_type)) {
+						lambdaTypes.Add (Tuple.Create (i, (object)param_type));
+						matchCount++;
+					}
+					continue;
+				}
+
+				TypeMirror tm = (TypeMirror) (types [i]);
+
+				if (param_type.FullName == tm.FullName) {
 					matchCount++;
 					continue;
 				}
 
-				if (param_type.IsAssignableFrom (types[i]))
+				if (param_type.IsAssignableFrom (tm))
 					continue;
 
 				if (param_type.IsGenericType) {
@@ -2115,10 +2152,10 @@ namespace Mono.Debugging.Soft
 					}
 				}
 
-				if (tryCasting && CanForceCast (ctx, param_type, types [i]))
+				if (tryCasting && CanForceCast (ctx, param_type, tm))
 					continue;
 
-				string fromType = !IsGeneratedType (types[i]) ? ctx.Adapter.GetDisplayTypeName (ctx, types[i]) : types[i].FullName;
+				string fromType = !IsGeneratedType (tm) ? ctx.Adapter.GetDisplayTypeName (ctx, tm) : tm.FullName;
 				string toType = ctx.Adapter.GetDisplayTypeName (ctx, param_type);
 
 				error = string.Format ("Argument {0}: Cannot implicitly convert `{1}' to `{2}'", i, fromType, toType);
@@ -2135,6 +2172,7 @@ namespace Mono.Debugging.Soft
 				return false;
 			}
 
+			resolvedLambdaTypes = lambdaTypes.Count == 0 ? null : lambdaTypes.ToArray ();
 			error = null;
 
 			return true;
@@ -2142,6 +2180,13 @@ namespace Mono.Debugging.Soft
 
 		static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror returnType, TypeMirror[] argTypes, List<MethodMirror> candidates, bool throwIfNotFound, bool tryCasting = true)
 		{
+			return OverloadResolve (ctx, type, methodName, genericTypeArgs, returnType, argTypes, candidates, throwIfNotFound, out _, tryCasting);
+		}
+
+		static MethodMirror OverloadResolve (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror[] genericTypeArgs, TypeMirror returnType, object[] argTypes, List<MethodMirror> candidates, bool throwIfNotFound, out Tuple<int, object>[] resolvedLambdaTypes, bool tryCasting = true)
+		{
+			resolvedLambdaTypes = null;
+
 			if (candidates.Count == 0) {
 				if (throwIfNotFound) {
 					string typeName = ctx.Adapter.GetDisplayTypeName (ctx, type);
@@ -2170,7 +2215,7 @@ namespace Mono.Debugging.Soft
 				string error;
 				int matchCount;
 
-				if (IsApplicable (ctx, candidates[0], genericTypeArgs, returnType, argTypes, out error, out matchCount, tryCasting))
+				if (IsApplicable (ctx, candidates[0], genericTypeArgs, returnType, argTypes, out error, out matchCount, out resolvedLambdaTypes, tryCasting))
 					return candidates[0];
 
 				if (throwIfNotFound)
@@ -2181,25 +2226,49 @@ namespace Mono.Debugging.Soft
 			
 			// Ok, now we need to find an exact match.
 			bool repeatedBestCount = false;
+			bool multipleMatchedLambdaTypes = false;
 			MethodMirror match = null;
 			int bestCount = -1;
 			
 			foreach (MethodMirror method in candidates) {
 				string error;
 				int matchCount;
+				Tuple<int, object>[] resolved;
 				
-				if (!IsApplicable (ctx, method, genericTypeArgs, returnType, argTypes, out error, out matchCount, tryCasting))
+				if (!IsApplicable (ctx, method, genericTypeArgs, returnType, argTypes, out error, out matchCount, out resolved, tryCasting))
 					continue;
 
 				if (matchCount == bestCount) {
 					repeatedBestCount = true;
+
+					if (resolvedLambdaTypes != null && resolved != null) {
+						multipleMatchedLambdaTypes = true;
+						break;
+					}
 				} else if (matchCount > bestCount) {
 					match = method;
 					bestCount = matchCount;
+					resolvedLambdaTypes = resolved;
 					repeatedBestCount = false;
 				}
 			}
 			
+			if (multipleMatchedLambdaTypes && repeatedBestCount) {
+				// TODO: Currently, we determine if a lambda parameter matches its
+				// expected type without checking the body of the lambda. This means
+				// a lambda parameter matches all overloaded/overriden methods.
+				// For instance, whatever the body of lambda that is given as a
+				// parameter, it matches following two methods ambiguously.
+				// - int OverloadedFunc (Func<int> f)
+				// - string OverloadedFunc (Func<string> f)
+				// We'd probably need to return mutiple candinates, and the caller
+				// of this method should resolve types for lambdas if needed.
+				if (!throwIfNotFound)
+					return null;
+
+				throw new EvaluatorException ("Overloaded/overriden lambda is not supported yet.");
+			}
+
 			if (match == null) {
 				if (!throwIfNotFound)
 					return null;

@@ -526,6 +526,127 @@ namespace Mono.Debugging.Tests
 		}
 
 		[Test]
+		public void FuncInvoke ()
+		{
+			ObjectValue val;
+
+			var soft = Session as SoftDebuggerSession;
+			if (soft != null && soft.ProtocolVersion < new Version (2, 31))
+				Assert.Ignore ("A newer version of the Mono runtime is required.");
+
+			val = Eval ("(System.Func<int,int>)(x => x + 10)");
+			Assert.IsFalse (val.IsNull);
+
+			val = Eval ("stringList.Any (x => x.Length == 3)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("true", val.Value);
+			Assert.AreEqual ("bool", val.TypeName);
+
+			val = Eval ("stringList.Last(x => x.CompareTo(\"c\") < 0)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("\"bbb\"", val.Value);
+			Assert.AreEqual ("string", val.TypeName);
+
+			val = Eval ("this.InvokeFuncInt (() => 100 + 500 * 2)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("1100", val.Value);
+			Assert.AreEqual ("int", val.TypeName);
+
+			val = Eval ("this.InvokeFuncString (() => \"test\")");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("\"test\"", val.Value);
+			Assert.AreEqual ("string", val.TypeName);
+
+			// TODO: Overriden or overloaded lambdas are not supported yet.
+			/*
+			val = Eval ("testEvaluationChild.OverridenInvokeFuncInt(() => 100)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("101", val.Value);
+			Assert.AreEqual ("int", val.TypeName);
+
+			val = Eval ("testEvaluationChild.OverridenInvokeFuncString(() => \"test\")");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("\"test-in-overriden\"", val.Value);
+			Assert.AreEqual ("string", val.TypeName);
+
+			val = Eval ("this.OverloadedInvokeFunc (() => 500 * 10)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("5000", val.Value);
+			Assert.AreEqual ("int", val.TypeName);
+
+			val = Eval ("this.OverloadedInvokeFunc (() => \"test\")");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("\"test\"", val.Value);
+			Assert.AreEqual ("string", val.TypeName);
+			*/
+			val = Eval ("InvokeGenericFunc (500, x => x * 10");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("5000", val.Value);
+			Assert.AreEqual ("int", val.TypeName);
+		}
+
+		[Test]
 		public void GenericMethodInvoke ()
 		{
 			var soft = Session as SoftDebuggerSession;

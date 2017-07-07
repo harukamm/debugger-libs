@@ -585,6 +585,30 @@ namespace Mono.Debugging.Tests
 			Assert.AreEqual ("\"test\"", val.Value);
 			Assert.AreEqual ("string", val.TypeName);
 
+			val = Eval ("this.InvokePredicateString (x => x == \"abc\")");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("true", val.Value);
+			Assert.AreEqual ("bool", val.TypeName);
+
+			val = Eval ("this.InvokeUserDelegate ((x, y) => x + y)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("6", val.Value);
+			Assert.AreEqual ("int", val.TypeName);
+
 			// TODO: Overriden or overloaded lambdas are not supported yet.
 			/*
 			val = Eval ("testEvaluationChild.OverridenInvokeFuncInt(() => 100)");

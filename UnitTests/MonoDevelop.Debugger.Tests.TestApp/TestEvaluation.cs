@@ -71,6 +71,8 @@ namespace MonoDevelop.Debugger.Tests.TestApp
 		}
 	}
 
+	public delegate int del (int x, int y);
+
 	class TestEvaluationParent
 	{
 		public int TestMethodBase ()
@@ -313,6 +315,16 @@ namespace MonoDevelop.Debugger.Tests.TestApp
 		public string InvokeFuncString (Func<string> f)
 		{
 			return f ();
+		}
+
+		public bool InvokePredicateString (Predicate<string> f)
+		{
+			return f ("abc");
+		}
+
+		public int InvokeUserDelegate (del f)
+		{
+			return f (5, 1);
 		}
 
 		public int OverloadedInvokeFunc (Func<int> f)

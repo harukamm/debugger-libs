@@ -34,22 +34,24 @@ namespace Mono.Debugger.Soft
 
 		private bool IsAcceptable (ParsedType t)
 		{
-			return t.nameSpace == "System" && t.typeName == "Func";
+			return t != null;
 		}
 
 		public string GetLiteralType (TypeMirror typ)
 		{
 			ParsedType t = ParseFullName (typ);
-			if (!IsAcceptable (t))
+			if (t == null || !IsAcceptable (t))
 				return null;
-			string types = String.Join (",", t.argTypeNames);
-			return t.nameSpace + "." + t.typeName + "<" + types + ">";
+			var ns = t.nameSpace != null ? t.nameSpace + "." : "";
+			var args = t.argTypeNames != null ? "<" + String.Join (",", t.argTypeNames) + ">" : "";
+
+			return ns + t.typeName + args;
 		}
 
-		private static ParsedType ParseFullName (TypeMirror typ)
+		private static ParsedType ParseFullName (TypeMirror t)
 		{
 			try {
-				return OnParseFullName (typ);
+				return OnParseFullName (t);
 			} catch (Exception) {
 				return null;
 			}
@@ -71,33 +73,45 @@ namespace Mono.Debugger.Soft
 			if (typ == null)
 				return null;
 
-			string nameSpace = "";
+			string fullName = typ.FullName;
+			string namespace1 = null;
 			string typeName = "";
-			string rest = typ.FullName;
-			if (rest.StartsWith ("System.", StringComparison.Ordinal)) {
-				nameSpace = "System";
-				rest = rest.Substring (7);
-			} else {
-				throw new ArgumentException ("Currently, we support only lambda whose namespace is `System`");
+			string [] argTypeNames = null;
+
+			string rest = fullName;
+
+			if (typ.Namespace != "")
+				namespace1 = typ.Namespace;
+
+			if (namespace1 != null) {
+				var omit = namespace1 + ".";
+				if (!rest.StartsWith (omit, StringComparison.Ordinal)) {
+					throw new ArgumentException ("should starts with namespace");
+				}
+				rest = rest.Substring (omit.Length, rest.Length - omit.Length);
 			}
 
 			string pattern = @"(.*?)`\d+(.*)";
 			Match m = Regex.Match (rest, pattern);
-			if (!m.Success)
-				throw new ArgumentException ("Failed to parse typeName");
-			typeName = m.Groups[1].Value;
-			rest = m.Groups[2].Value;
+			if (m.Success) {
+				typeName = m.Groups[1].Value;
+				rest = m.Groups[2].Value;
 
-			int len = rest.Length;
-			if (rest[0] == '[' && rest[len - 1] == ']')
+				int len = rest.Length;
+				if (rest[0] != '[' || rest[len - 1] != ']')
+					throw new ArgumentException ("Failed to skip braces");
 				rest = rest.Substring (1, len - 2);
-			else
-				throw new ArgumentException ("Failed to skip braces");
+				argTypeNames = ReadArgTypeNames (rest);
+			} else {
+				if (!rest.EndsWith (typ.Name, StringComparison.Ordinal))
+					throw new ArgumentException ("invalid");
+				typeName = rest.Replace ('+', '.');
+			}
 
 			ParsedType t = new ParsedType ();
-			t.nameSpace = nameSpace;
+			t.nameSpace = namespace1;
 			t.typeName = typeName;
-			t.argTypeNames = ReadArgTypeNames (rest);
+			t.argTypeNames = argTypeNames;
 
 			return t;
 		}

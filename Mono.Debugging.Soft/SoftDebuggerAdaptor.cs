@@ -559,26 +559,38 @@ namespace Mono.Debugging.Soft
 			string id = Guid.NewGuid ().ToString ("N");
 			string className = "Lambda" + id;
 			string typeName = val.GetLiteralType (toType);
-			byte [] bytes = CompileLambdaExpression (className, val.Expression, typeName, out compileError);
+			byte [] bytes = CompileLambdaExpression (ctx, className, val.Expression, typeName, out compileError);
 
 			return LoadLambdaValue (ctx, className, bytes);
 		}
 
-		private Compilation CreateLibraryCompilation (string assemblyName, bool enableOptimisations)
+		private Compilation CreateLibraryCompilation (SoftEvaluationContext ctx, string assemblyName, bool enableOptimisations)
 		{
 			var options = new CSharpCompilationOptions (
 					OutputKind.DynamicallyLinkedLibrary,
 					optimizationLevel: enableOptimisations ? OptimizationLevel.Release : OptimizationLevel.Debug);
 
-			// TODO: Use assembly of debugee instead of debbuger's.
-			IReadOnlyCollection<MetadataReference> references =
-				new [] { MetadataReference.CreateFromFile (typeof (Binder).GetTypeInfo ().Assembly.Location) };
+			// Add references to assembly of debugee
+			var assems = ctx.Domain.GetAssemblies ();
+			var references = new List<MetadataReference>();
+			foreach (var assem in assems) {
+				try {
+					var location = assem.Location;
+					if (System.IO.Path.IsPathRooted (location)) {
+						var meta = MetadataReference.CreateFromFile (location);
+						references.Add (meta);
+					}
+				} catch (ArgumentException) {
+					// When assembly location path is invalid.
+					continue;
+				}
+			}
 
 			return CSharpCompilation.Create (assemblyName, options: options)
 				                    .AddReferences (references);
 		}
 
-		private byte [] CompileLambdaExpression (string className, string lambdaExpression, string typeName, out string error)
+		private byte[] CompileLambdaExpression (SoftEvaluationContext ctx, string className, string lambdaExpression, string typeName, out string error)
 		{
 			string assemblyNamePrefix = "lambdaAssem";
 			string assemblyName = assemblyNamePrefix + className;
@@ -603,7 +615,7 @@ namespace Mono.Debugging.Soft
 
 			try {
 				IEnumerable<SyntaxTree> trees = new [] { syntaxTree };
-				Compilation compilation = CreateLibraryCompilation (assemblyName, true).AddSyntaxTrees (trees);
+				Compilation compilation = CreateLibraryCompilation (ctx, assemblyName, true).AddSyntaxTrees (trees);
 
 				var stream = new System.IO.MemoryStream ();
 				var compileResult = compilation.Emit (stream);

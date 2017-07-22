@@ -29,12 +29,7 @@ namespace Mono.Debugger.Soft
 
 		public bool IsAcceptableType (TypeMirror t)
 		{
-			return IsAcceptable (t.FullName);
-		}
-
-		private bool IsAcceptable (string fullName)
-		{
-			return IsAcceptable (ParseFullName (fullName));
+			return IsAcceptable (ParseFullName (t));
 		}
 
 		private bool IsAcceptable (ParsedType t)
@@ -44,33 +39,23 @@ namespace Mono.Debugger.Soft
 
 		public string GetLiteralType (TypeMirror typ)
 		{
-			return GetLiteralType (typ.FullName);
-		}
-
-		public string GetLiteralType (string fullName)
-		{
-			ParsedType t = ParseFullName (fullName);
+			ParsedType t = ParseFullName (typ);
 			if (!IsAcceptable (t))
 				return null;
 			string types = String.Join (",", t.argTypeNames);
 			return t.nameSpace + "." + t.typeName + "<" + types + ">";
 		}
 
-		private static ParsedType ParseFullName (TypeMirror t)
-		{
-			return ParseFullName (t.FullName);
-		}
-
-		private static ParsedType ParseFullName (string fullName)
+		private static ParsedType ParseFullName (TypeMirror typ)
 		{
 			try {
-				return OnParseFullName (fullName);
+				return OnParseFullName (typ);
 			} catch (Exception) {
 				return null;
 			}
 		}
 
-		private static ParsedType OnParseFullName (string fullName)
+		private static ParsedType OnParseFullName (TypeMirror typ)
 		{
 			// Parse fullName of type to ParsedType that is defined above. Examples for the parsing
 			// are following.
@@ -83,9 +68,12 @@ namespace Mono.Debugger.Soft
 			//  => { nameSpace: "System", typeName: "Func",
 			//       argTypeNames: ["System.Int32", "System.Single"] }
 
+			if (typ == null)
+				return null;
+
 			string nameSpace = "";
 			string typeName = "";
-			string rest = fullName;
+			string rest = typ.FullName;
 			if (rest.StartsWith ("System.", StringComparison.Ordinal)) {
 				nameSpace = "System";
 				rest = rest.Substring (7);

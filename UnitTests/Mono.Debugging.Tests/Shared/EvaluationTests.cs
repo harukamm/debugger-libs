@@ -2577,18 +2577,5 @@ namespace Mono.Debugging.Tests
 			var children = Eval ("arrayWithLowerBounds").GetAllChildrenSync ();
 			Assert.AreEqual ("[5, ...]", children [0].Name);
 		}
-
-		[Test]
-		public void ParseLambdaTypeTests ()
-		{
-			var lambdaType = new DelayedLambdaType (null /* virtual machine */, "");
-			string fullName = "System.Func`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]]";
-			string type = lambdaType.GetLiteralType (fullName);
-			Assert.AreEqual (type, "System.Func<System.Int32>");
-
-			fullName = "System.Func`2[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089],[System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]]";
-			type = lambdaType.GetLiteralType (fullName);
-			Assert.AreEqual (type, "System.Func<System.Int32,System.String>");
-		}
 	}
 }

@@ -561,6 +561,18 @@ namespace Mono.Debugging.Tests
 			Assert.AreEqual ("\"bbb\"", val.Value);
 			Assert.AreEqual ("string", val.TypeName);
 
+			val = Eval ("stringList.Sum(x => x.Length)");
+			if (!AllowTargetInvokes) {
+				var options = Session.Options.EvaluationOptions.Clone ();
+				options.AllowTargetInvoke = true;
+
+				Assert.IsTrue (val.IsImplicitNotSupported);
+				val.Refresh (options);
+				val = val.Sync ();
+			}
+			Assert.AreEqual ("9", val.Value);
+			Assert.AreEqual ("int", val.TypeName);
+
 			val = Eval ("this.InvokeFuncInt (() => 100 + 500 * 2)");
 			if (!AllowTargetInvokes) {
 				var options = Session.Options.EvaluationOptions.Clone ();
@@ -609,8 +621,6 @@ namespace Mono.Debugging.Tests
 			Assert.AreEqual ("6", val.Value);
 			Assert.AreEqual ("int", val.TypeName);
 
-			// TODO: Overriden or overloaded lambdas are not supported yet.
-			/*
 			val = Eval ("testEvaluationChild.OverridenInvokeFuncInt(() => 100)");
 			if (!AllowTargetInvokes) {
 				var options = Session.Options.EvaluationOptions.Clone ();
@@ -656,7 +666,7 @@ namespace Mono.Debugging.Tests
 			}
 			Assert.AreEqual ("\"test\"", val.Value);
 			Assert.AreEqual ("string", val.TypeName);
-			*/
+
 			val = Eval ("InvokeGenericFunc (500, x => x * 10");
 			if (!AllowTargetInvokes) {
 				var options = Session.Options.EvaluationOptions.Clone ();

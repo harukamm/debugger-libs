@@ -522,11 +522,19 @@ namespace Mono.Debugging.Soft
 			return cx.Session.VirtualMachine.CreateValue (value);
 		}
 
-		public override object CreateDelayedLambdaValue (EvaluationContext ctx, string expression)
+		public override object CreateDelayedLambdaValue (EvaluationContext ctx, string expression, Tuple<string, object>[] localVariables)
 		{
 			var soft = (SoftEvaluationContext)ctx;
-			var type = new DelayedLambdaType (soft.Session.VirtualMachine, expression);
-			return new DelayedLambdaValue (soft.Session.VirtualMachine, type);
+
+			var locals = new Tuple<string, Value>[localVariables.Length];
+			for (int i = 0; i < localVariables.Length; i++) {
+				var pair = localVariables[i];
+				var name = pair.Item1;
+				var val = (Value) pair.Item2;
+				locals[i] = Tuple.Create (name, val);
+			}
+
+			return new DelayedLambdaValue (soft.Session.VirtualMachine, locals, expression);
 		}
 
 		public object CreateByteArray (EvaluationContext ctx, byte [] byts)
@@ -556,12 +564,10 @@ namespace Mono.Debugging.Soft
 				return null;
 			}
 
-			string id = Guid.NewGuid ().ToString ("N");
-			string className = "Lambda" + id;
 			string typeName = val.GetLiteralType (toType);
-			byte [] bytes = CompileLambdaExpression (ctx, className, val.Expression, typeName, out compileError);
+			byte [] bytes = CompileLambdaExpression (ctx, val.DelayedType, typeName, out compileError);
 
-			return LoadLambdaValue (ctx, className, bytes);
+			return LoadLambdaValue (ctx, val.DelayedType, bytes);
 		}
 
 		private Compilation CreateLibraryCompilation (SoftEvaluationContext ctx, string assemblyName, bool enableOptimisations)
@@ -590,25 +596,40 @@ namespace Mono.Debugging.Soft
 				                    .AddReferences (references);
 		}
 
-		private byte[] CompileLambdaExpression (SoftEvaluationContext ctx, string className, string lambdaExpression, string typeName, out string error)
+		private byte[] CompileLambdaExpression (SoftEvaluationContext ctx, DelayedLambdaType val, string typeName, out string error)
 		{
+			string className = val.Name;
 			string assemblyNamePrefix = "lambdaAssem";
 			string assemblyName = assemblyNamePrefix + className;
+			string lambdaExpression = val.Expression;
 			int startOfExp, endOfExp;
 			error = null;
+
+			Tuple<string, Value>[] values = val.Locals;
+			string[] paramLiterals = new string [values.Length];
+			for (int i = 0; i < values.Length; i++) {
+				var v = values [i];
+				var typ = GetValueType (ctx, v.Item2);
+				var typ2 = ToTypeMirror (ctx, typ);
+				var typ3 = ctx.Adapter.GetDisplayTypeName (typ2.FullName);
+				Console.WriteLine (typ3);
+				paramLiterals [i] = typ3 + " " + v.Item1;
+			}
+			string paramLiteral = string.Join (",", paramLiterals);
 
 			var sb = new System.Text.StringBuilder ();
 			sb.Append ("public class ");
 			sb.Append (className);
 			sb.Append ("{public static ");
 			sb.Append (typeName);
-			sb.Append (" injected_fn() {");
+			sb.Append (" injected_fn(" + paramLiteral + ") {");
 			sb.Append ("return (");
 			startOfExp = sb.Length;
 			sb.Append (lambdaExpression);
 			endOfExp = startOfExp + lambdaExpression.Length;
 			sb.Append (");");
 			sb.Append ("}}");
+
 
 			var options = new CSharpParseOptions (kind: SourceCodeKind.Regular);
 			SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText (sb.ToString (), options);
@@ -639,7 +660,7 @@ namespace Mono.Debugging.Soft
 			return null;
 		}
 
-		private object LoadLambdaValue (SoftEvaluationContext ctx, string className, byte[] bytes)
+		private object LoadLambdaValue (SoftEvaluationContext ctx, DelayedLambdaType typ, byte[] bytes)
 		{
 			if (bytes == null)
 				return null;
@@ -652,7 +673,7 @@ namespace Mono.Debugging.Soft
 			var asm = ctx.Adapter.RuntimeInvoke (ctx, assemblyType, null, "Load", argTypes, argValues);
 
 			var stringType = ctx.Adapter.GetType (ctx, "System.String");
-			var classNameValue = ctx.Adapter.CreateValue (ctx, className);
+			var classNameValue = ctx.Adapter.CreateValue (ctx, typ.Name);
 			argTypes = new object[] { stringType };
 			argValues = new object[] { classNameValue };
 			var injectedType = ctx.Adapter.RuntimeInvoke (ctx, assemblyType, asm, "GetType", argTypes, argValues);
@@ -667,9 +688,10 @@ namespace Mono.Debugging.Soft
 			var objectType = ctx.Adapter.GetType (ctx, "System.Object");
 			var objectArrayType = ctx.Adapter.GetType (ctx, "System.Object[]");
 			var nullValue = ctx.Adapter.CreateValue (ctx, null);
-			var emptyArrayValue = ctx.Adapter.CreateArray (ctx, objectType, new object[] {});
-			argTypes = new object[] { objectType, objectArrayType };
-			argValues = new object[] { nullValue, emptyArrayValue };
+			var paramValues = typ.GetLocalValues ();
+			var paramValuesArray = ctx.Adapter.CreateArray (ctx, objectType, paramValues);
+			argTypes = new object [] { objectType, objectArrayType };
+			argValues = new object [] { nullValue, paramValuesArray };
 			return ctx.Adapter.RuntimeInvoke (ctx, methodInfoType, injectedFun, "Invoke", argTypes, argValues);
 		}
 
@@ -1749,7 +1771,7 @@ namespace Mono.Debugging.Soft
 						continue;
 
 					var lite = lambdaType.GetLiteralType (paramType);
-					var bytes = CompileLambdaExpression (soft, "test", lambdaType.Expression, lite, out _);
+					var bytes = CompileLambdaExpression (soft, lambdaType, lite, out _);
 
 					if (bytes != null) {
 						resolvedBuf [matchCount] = Tuple.Create (i, (object)paramType);

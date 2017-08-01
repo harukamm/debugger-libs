@@ -945,7 +945,11 @@ namespace Mono.Debugging.Evaluation
 				parent = parent.Parent;
 
 			if (parent is InvocationExpression || parent is CastExpression) {
-				object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString ());
+				var visitor = new NRefactoryLambdaBodyVisitor (ctx);
+				var body = lambdaExpression.AcceptVisitor<string> (visitor);
+				var values = visitor.GetLocalValues ();
+				Console.WriteLine (body);
+				object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString (), values);
 				if (val != null)
 					return LiteralValueReference.CreateTargetObjectLiteral (ctx, expression, val);
 			}

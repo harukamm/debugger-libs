@@ -949,7 +949,7 @@ namespace Mono.Debugging.Evaluation
 				var body = lambdaExpression.AcceptVisitor<string> (visitor);
 				var values = visitor.GetLocalValues ();
 				Console.WriteLine (body);
-				object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, lambdaExpression.ToString (), values);
+				object val = ctx.Adapter.CreateDelayedLambdaValue (ctx, body, values);
 				if (val != null)
 					return LiteralValueReference.CreateTargetObjectLiteral (ctx, expression, val);
 			}

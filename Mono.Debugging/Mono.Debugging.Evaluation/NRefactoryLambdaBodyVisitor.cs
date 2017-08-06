@@ -81,10 +81,11 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitAsExpression (AsExpression asExpression)
 		{
-			asExpression.Expression.AcceptVisitor (this);
-			asExpression.Expression.AcceptVisitor (this);
+			var exp = asExpression.Expression.AcceptVisitor (this);
+            var as_ = asExpression.AsToken;
+            var typ = asExpression.Type.AcceptVisitor (this);
 
-			return asExpression.ToString ();
+            return exp + " " + as_ + " " + typ;
 		}
 
 		public string VisitAssignmentExpression (AssignmentExpression assignmentExpression)
@@ -97,30 +98,31 @@ namespace Mono.Debugging.Evaluation
 			var baser = "base";
 			Tuple<string, object> generated;
 			if (localValues.TryGetValue (baser, out generated))
-				return generated.Item1;
+				return " " + generated.Item1 + " ";
 
-			var visitor = new NRefactoryExpressionEvaluatorVisitor (ctx, baser, null, userVariables);
-			var vr = baseReferenceExpression.AcceptVisitor<ValueReference> (visitor);
+            var vr = Evalueate (baseReferenceExpression, baser);
 			var sym = GenerateSym (baser);
 			generated = Tuple.Create (sym, vr.Value);
 			localValues.Add (baser, generated);
-			return sym;
+			return " " + sym + " ";
 		}
 
 		public string VisitBinaryOperatorExpression (BinaryOperatorExpression binaryOperatorExpression)
 		{
-			binaryOperatorExpression.Left.AcceptVisitor (this);
-			binaryOperatorExpression.Right.AcceptVisitor (this);
+			var left = binaryOperatorExpression.Left.AcceptVisitor (this);
+			var right = binaryOperatorExpression.Right.AcceptVisitor (this);
 
-			return binaryOperatorExpression.ToString ();
+            return left + binaryOperatorExpression.OperatorToken + right;
 		}
 
 		public string VisitCastExpression (CastExpression castExpression)
 		{
-			castExpression.Type.AcceptVisitor (this);
-			castExpression.Expression.AcceptVisitor (this);
+            var lpar = castExpression.LParToken;
+            var typ = castExpression.Type.AcceptVisitor (this);
+            var rpar = castExpression.RParToken;
+			var exp = castExpression.Expression.AcceptVisitor (this);
 
-			return castExpression.ToString ();
+            return lpar + typ + rpar + exp;
 		}
 
 		public string VisitCheckedExpression (CheckedExpression checkedExpression)
@@ -130,11 +132,13 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitConditionalExpression (ConditionalExpression conditionalExpression)
 		{
-			conditionalExpression.Condition.AcceptVisitor (this);
-			conditionalExpression.TrueExpression.AcceptVisitor (this);
-			conditionalExpression.FalseExpression.AcceptVisitor (this);
+			var cond = conditionalExpression.Condition.AcceptVisitor (this);
+            var mark = conditionalExpression.QuestionMarkToken;
+			var texp = conditionalExpression.TrueExpression.AcceptVisitor (this);
+            var colon = conditionalExpression.ColonToken;
+			var fexp = conditionalExpression.FalseExpression.AcceptVisitor (this);
 
-			return conditionalExpression.ToString ();
+            return cond + mark + texp + colon + fexp;
 		}
 
 		public string VisitDefaultValueExpression (DefaultValueExpression defaultValueExpression)
@@ -147,64 +151,72 @@ namespace Mono.Debugging.Evaluation
 			throw NotSupportedToConsistency ();
 		}
 
-		public string VisitIdentifierExpression (IdentifierExpression identifierExpression)
-		{
-			var identifier = identifierExpression.Identifier;
+        public string VisitIdentifierExpression(IdentifierExpression identifierExpression)
+        {
+            var identifier = identifierExpression.Identifier;
 
-			Tuple<string, object> generated;
-			if (localValues.TryGetValue (identifier, out generated))
-				return generated.Item1;
+            Tuple<string, object> generated;
+            if (localValues.TryGetValue(identifier, out generated))
+                return " " + generated.Item1 + " ";
 
-			try {
-				var visitor = new NRefactoryExpressionEvaluatorVisitor (ctx, identifier, null, userVariables);
-				var vr = identifierExpression.AcceptVisitor<ValueReference> (visitor);
-				var sym = identifier; //GenerateSym (identifier);
-				generated = Tuple.Create (sym, vr.Value);
-				localValues.Add (identifier, generated);
-				return sym;
-			} catch (EvaluatorException ex) {
-			}
-
-			// property..
-			return identifierExpression.ToString ();
-		}
+            var vr = Evalueate (identifierExpression, identifier);
+            var sym = identifier;
+            generated = Tuple.Create(sym, vr.Value);
+            localValues.Add(identifier, generated);
+            return " " + sym + " ";
+        }
 
 		public string VisitIndexerExpression (IndexerExpression indexerExpression)
 		{
-			indexerExpression.Target.AcceptVisitor (this);
-			foreach (var arg in indexerExpression.Arguments)
-				arg.AcceptVisitor (this);
-
-			return indexerExpression.ToString ();
+            throw new NotImplementedException ();
 		}
 
 		public string VisitInvocationExpression (InvocationExpression invocationExpression)
 		{
-			foreach (var arg in invocationExpression.Arguments)
-				arg.AcceptVisitor (this);
+            var typ = invocationExpression.Target.AcceptVisitor (this);
+            var lpar = invocationExpression.LParToken;
+            var args = new string[invocationExpression.Arguments.Count];
+            int i = 0;
+            foreach (var arg in invocationExpression.Arguments) {
+                args[i] = arg.AcceptVisitor(this);
+                i++;
+            }
+            var rpar = invocationExpression.RParToken;
 
-			return invocationExpression.ToString ();
+            return typ + lpar + string.Join(", ", args) + rpar;
 		}
 
 		public string VisitIsExpression (IsExpression isExpression)
 		{
-			isExpression.Type.AcceptVisitor (this);
-			isExpression.Expression.AcceptVisitor (this);
+			var typ = isExpression.Type.AcceptVisitor (this);
+            var is_ = isExpression.IsToken;
+			var exp = isExpression.Expression.AcceptVisitor (this);
 
-			return isExpression.ToString ();
+            return typ + " " + is_ + " " + exp;
 		}
 
 		public string VisitLambdaExpression (LambdaExpression lambdaExpression)
 		{
-			lambdaExpression.Body.AcceptVisitor (this);
+            var args = new string[lambdaExpression.Parameters.Count];
+            int i = 0;
+            foreach (var p in lambdaExpression.Parameters) {
+                args[i] = p.ToString();
+                i++;
+            }
+            var lpar = "(";
+            var arg_ = string.Join(", ", args);
+            var rpar = ")";
+            var arrow = lambdaExpression.ArrowToken;
+            var body = lambdaExpression.Body.AcceptVisitor(this);
 
-			return lambdaExpression.ToString ();
+            return lpar + arg_ + rpar + " " + arrow + " " + body;
 		}
 
 		public string VisitMemberReferenceExpression (MemberReferenceExpression memberReferenceExpression)
 		{
-			// hoge.fuga[i]
-			return memberReferenceExpression.ToString ();
+            var str = memberReferenceExpression.ToString();
+            var e = Evalueate(memberReferenceExpression, str);
+            return str;
 		}
 
 		public string VisitNamedArgumentExpression (NamedArgumentExpression namedArgumentExpression)
@@ -224,10 +236,12 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitObjectCreateExpression (ObjectCreateExpression objectCreateExpression)
 		{
-			foreach (var arg in objectCreateExpression.Arguments)
-				arg.AcceptVisitor (this);
+            throw NotSupported();
+			//OverloadResolve (cx, tm, ".ctor", null, types, true, false, false);
+            /*
 
 			return objectCreateExpression.ToString ();
+			*/
 		}
 
 		public string VisitAnonymousTypeCreateExpression (AnonymousTypeCreateExpression anonymousTypeCreateExpression)
@@ -237,7 +251,11 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitParenthesizedExpression (ParenthesizedExpression parenthesizedExpression)
 		{
-			return parenthesizedExpression.Expression.AcceptVisitor (this);
+            var lpar = parenthesizedExpression.LParToken;
+            var exp = parenthesizedExpression.Expression.AcceptVisitor (this);
+            var rpar = parenthesizedExpression.RParToken;
+
+            return lpar + exp + rpar;
 		}
 
 		public string VisitPointerReferenceExpression (PointerReferenceExpression pointerReferenceExpression)
@@ -262,13 +280,12 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitThisReferenceExpression (ThisReferenceExpression thisReferenceExpression)
 		{
-			var thisr = "base";
+			var thisr = "this";
 			Tuple<string, object> generated;
 			if (localValues.TryGetValue (thisr, out generated))
 				return generated.Item1;
 
-			var visitor = new NRefactoryExpressionEvaluatorVisitor (ctx, thisr, null, userVariables);
-			var vr = thisReferenceExpression.AcceptVisitor<ValueReference> (visitor);
+            var vr = Evalueate (thisReferenceExpression, thisr);
 			var sym = GenerateSym (thisr);
 			generated = Tuple.Create (sym, vr.Value);
 			localValues.Add (thisr, generated);
@@ -277,9 +294,12 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitTypeOfExpression (TypeOfExpression typeOfExpression)
 		{
-			typeOfExpression.Type.AcceptVisitor (this);
+            var typof = typeOfExpression.TypeOfToken.ToString();
+            var lpar = typeOfExpression.LParToken;
+            var typ = typeOfExpression.Type.AcceptVisitor(this);
+            var rpar = typeOfExpression.RParToken;
 
-			return typeOfExpression.ToString ();
+            return typof + lpar + typ + rpar;
 		}
 
 		public string VisitTypeReferenceExpression (TypeReferenceExpression typeReferenceExpression)
@@ -289,9 +309,13 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitUnaryOperatorExpression (UnaryOperatorExpression unaryOperatorExpression)
 		{
-			var exp = unaryOperatorExpression.Expression.AcceptVisitor (this);
+            var opType = unaryOperatorExpression.Operator;
+            var opSymbol = UnaryOperatorExpression.GetOperatorRole(opType);
+            var exp = unaryOperatorExpression.Expression.AcceptVisitor(this);
+            if (opType == UnaryOperatorType.PostIncrement || opType == UnaryOperatorType.PostDecrement)
+                return exp + opSymbol;
 
-			return unaryOperatorExpression.Operator.ToString () + exp;
+            return opSymbol + exp;
 		}
 
 		public string VisitUncheckedExpression (UncheckedExpression uncheckedExpression)

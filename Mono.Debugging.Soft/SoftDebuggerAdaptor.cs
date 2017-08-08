@@ -1842,6 +1842,13 @@ namespace Mono.Debugging.Soft
 			return type is DelayedLambdaType;
 		}
 
+		public override bool IsPublic (EvaluationContext ctx, object type)
+		{
+			var tm = ToTypeMirror (ctx, type);
+
+			return tm != null && tm.IsPublic;
+		}
+
 		protected override TypeDisplayData OnGetTypeDisplayData (EvaluationContext ctx, object type)
 		{
 			Dictionary<string, DebuggerBrowsableState> memberData = null;

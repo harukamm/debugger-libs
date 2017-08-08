@@ -366,6 +366,11 @@ namespace Mono.Debugging.Evaluation
 		{
 			return false;
 		}
+
+		public virtual bool IsPublic (EvaluationContext ctx, object type)
+		{
+			return false;
+		}
 		
 		public object GetType (EvaluationContext ctx, string name)
 		{

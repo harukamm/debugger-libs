@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
+
+using Mono.Debugging.Client;
 
 using ICSharpCode.NRefactory.CSharp;
 
@@ -46,15 +49,74 @@ namespace Mono.Debugging.Evaluation
 
 		string GenerateSym (string s)
 		{
-			int c = count;
-			count++;
-			return s + "_" + c;
+			string sym;
+			do {
+				sym = s + "_" + count++;
+			} while (ExistsLocalName(sym));
+
+			return sym;
 		}
 
-		ValueReference Evalueate (AstNode t, string expression)
+		ValueReference Evaluate (AstNode t, string expression)
 		{
 			var visitor = new NRefactoryExpressionEvaluatorVisitor (ctx, expression, null, userVariables);
 			return t.AcceptVisitor<ValueReference> (visitor);
+		}
+
+		bool HasPublicValue (ValueReference vr)
+		{
+			if (vr is NamespaceValueReference)
+				return true;
+
+			var isField = (vr.Flags & ObjectValueFlags.Field) != 0;
+			var isProperty = (vr.Flags & ObjectValueFlags.Property) != 0;
+			var isPublic = (vr.Flags & ObjectValueFlags.Public) != 0;
+
+			return !(isField || isProperty) || isPublic;
+		}
+
+		bool HasPublicType (ValueReference vr)
+		{
+			if (vr is NamespaceValueReference)
+				return true;
+
+			return ctx.Adapter.IsPublic(ctx, vr.Type);
+		}
+
+		string AddToLocals (string name, object val, bool shouldRename)
+		{
+			if (localValues.ContainsKey(name))
+				return GetLocalName(name);
+
+			string localName;
+			if (shouldRename) {
+				localName = GenerateSym(name);
+			} else if (!ExistsLocalName(name)) {
+				localName = name;
+			} else {
+				throw EvaluationError("");
+			}
+
+			var pair = Tuple.Create(localName, val);
+			localValues.Add(name, pair);
+			return localName;
+		}
+
+		string GetLocalName (string name)
+		{
+			Tuple<string, object> pair;
+			if (localValues.TryGetValue(name, out pair))
+				return pair.Item1;
+			return null;
+		}
+
+		bool ExistsLocalName (string localName)
+		{
+			foreach(var pair in localValues.Values) {
+				if (pair.Item1 == localName)
+					return true;
+			}
+			return false;
 		}
 
 		#region IAstVisitor implementation
@@ -82,10 +144,10 @@ namespace Mono.Debugging.Evaluation
 		public string VisitAsExpression (AsExpression asExpression)
 		{
 			var exp = asExpression.Expression.AcceptVisitor (this);
-            var as_ = asExpression.AsToken;
-            var typ = asExpression.Type.AcceptVisitor (this);
+			var as_ = asExpression.AsToken;
+			var typ = asExpression.Type.AcceptVisitor (this);
 
-            return exp + " " + as_ + " " + typ;
+			return exp + " " + as_ + " " + typ;
 		}
 
 		public string VisitAssignmentExpression (AssignmentExpression assignmentExpression)
@@ -96,15 +158,13 @@ namespace Mono.Debugging.Evaluation
 		public string VisitBaseReferenceExpression (BaseReferenceExpression baseReferenceExpression)
 		{
 			var baser = "base";
-			Tuple<string, object> generated;
-			if (localValues.TryGetValue (baser, out generated))
-				return " " + generated.Item1 + " ";
+			var localbase = GetLocalName(baser);
+			if (localbase != null)
+				return localbase;
 
-            var vr = Evalueate (baseReferenceExpression, baser);
-			var sym = GenerateSym (baser);
-			generated = Tuple.Create (sym, vr.Value);
-			localValues.Add (baser, generated);
-			return " " + sym + " ";
+			var vr = Evaluate (baseReferenceExpression, baser);
+			localbase = AddToLocals(baser, vr.Value, true);
+			return localbase;
 		}
 
 		public string VisitBinaryOperatorExpression (BinaryOperatorExpression binaryOperatorExpression)
@@ -112,17 +172,17 @@ namespace Mono.Debugging.Evaluation
 			var left = binaryOperatorExpression.Left.AcceptVisitor (this);
 			var right = binaryOperatorExpression.Right.AcceptVisitor (this);
 
-            return left + binaryOperatorExpression.OperatorToken + right;
+			return left + binaryOperatorExpression.OperatorToken + right;
 		}
 
 		public string VisitCastExpression (CastExpression castExpression)
 		{
-            var lpar = castExpression.LParToken;
-            var typ = castExpression.Type.AcceptVisitor (this);
-            var rpar = castExpression.RParToken;
+			var lpar = castExpression.LParToken;
+			var typ = castExpression.Type.AcceptVisitor (this);
+			var rpar = castExpression.RParToken;
 			var exp = castExpression.Expression.AcceptVisitor (this);
 
-            return lpar + typ + rpar + exp;
+			return lpar + typ + rpar + exp;
 		}
 
 		public string VisitCheckedExpression (CheckedExpression checkedExpression)
@@ -133,12 +193,12 @@ namespace Mono.Debugging.Evaluation
 		public string VisitConditionalExpression (ConditionalExpression conditionalExpression)
 		{
 			var cond = conditionalExpression.Condition.AcceptVisitor (this);
-            var mark = conditionalExpression.QuestionMarkToken;
+			var mark = conditionalExpression.QuestionMarkToken;
 			var texp = conditionalExpression.TrueExpression.AcceptVisitor (this);
-            var colon = conditionalExpression.ColonToken;
+			var colon = conditionalExpression.ColonToken;
 			var fexp = conditionalExpression.FalseExpression.AcceptVisitor (this);
 
-            return cond + mark + texp + colon + fexp;
+			return cond + mark + texp + colon + fexp;
 		}
 
 		public string VisitDefaultValueExpression (DefaultValueExpression defaultValueExpression)
@@ -151,72 +211,120 @@ namespace Mono.Debugging.Evaluation
 			throw NotSupportedToConsistency ();
 		}
 
-        public string VisitIdentifierExpression(IdentifierExpression identifierExpression)
-        {
-            var identifier = identifierExpression.Identifier;
+		public string VisitIdentifierExpression(IdentifierExpression identifierExpression)
+		{
+			var identifier = identifierExpression.Identifier;
 
-            Tuple<string, object> generated;
-            if (localValues.TryGetValue(identifier, out generated))
-                return " " + generated.Item1 + " ";
+			var localid = GetLocalName(identifier);
+			if (localid != null)
+				return localid;
 
-            var vr = Evalueate (identifierExpression, identifier);
-            var sym = identifier;
-            generated = Tuple.Create(sym, vr.Value);
-            localValues.Add(identifier, generated);
-            return " " + sym + " ";
-        }
+			var vr = Evaluate (identifierExpression, identifier);
+			localid = AddToLocals(identifier, vr.Value, false);
+			return localid;
+		}
 
 		public string VisitIndexerExpression (IndexerExpression indexerExpression)
 		{
-            throw new NotImplementedException ();
+			throw new NotImplementedException ();
 		}
 
 		public string VisitInvocationExpression (InvocationExpression invocationExpression)
 		{
-            var typ = invocationExpression.Target.AcceptVisitor (this);
-            var lpar = invocationExpression.LParToken;
-            var args = new string[invocationExpression.Arguments.Count];
-            int i = 0;
-            foreach (var arg in invocationExpression.Arguments) {
-                args[i] = arg.AcceptVisitor(this);
-                i++;
-            }
-            var rpar = invocationExpression.RParToken;
+			var invocationTarget = invocationExpression.Target;
+			var argc = invocationExpression.Arguments.Count;
+			string methodName;
+			var target = "";
 
-            return typ + lpar + string.Join(", ", args) + rpar;
+			if (invocationTarget is MemberReferenceExpression) {
+				var method = (MemberReferenceExpression)invocationTarget;
+				if (method.TypeArguments.Count != 0)
+					throw EvaluationError("Not supported... yet :D");
+
+				methodName = method.MemberName;
+				target = method.Target.AcceptVisitor(this);
+				target = target + "." + methodName;
+
+			} else if (invocationTarget is IdentifierExpression) {
+				var method = (IdentifierExpression)invocationTarget;
+				if (method.TypeArguments.Count != 0)
+					throw EvaluationError("Not supported... yet :D");
+
+				methodName = method.Identifier;
+				var vref = ctx.Adapter.GetThisReference(ctx);
+				var vtype = ctx.Adapter.GetEnclosingType(ctx);
+				var hasInstanceMethod = ctx.Adapter.HasMethod(ctx, vtype, methodName, BindingFlags.Instance);
+				var hasStaticMethod = ctx.Adapter.HasMethod(ctx, vtype, methodName, BindingFlags.Static);
+				var opt = "";
+
+				if (vref == null && hasStaticMethod) {
+					var typeName = ctx.Adapter.GetTypeName(ctx, vtype);
+					opt = ctx.Adapter.GetDisplayTypeName(typeName);
+				} else if (vref != null && hasInstanceMethod){
+					if (hasStaticMethod) {
+						throw EvaluationError("Not supported.");
+					}
+					opt = GetLocalName("this");
+					if (opt == null)
+						opt = AddToLocals("this", vref, true);
+				}
+				target = opt + "." + methodName;
+			} else {
+				throw NotSupportedToConsistency();
+			}
+
+			var lpar = invocationExpression.LParToken;
+			var args = new string[invocationExpression.Arguments.Count];
+			int i = 0;
+			foreach (var arg in invocationExpression.Arguments) {
+				args[i] = arg.AcceptVisitor(this);
+				i++;
+			}
+			var rpar = invocationExpression.RParToken;
+
+			return target + lpar + string.Join(", ", args) + rpar;
 		}
 
 		public string VisitIsExpression (IsExpression isExpression)
 		{
 			var typ = isExpression.Type.AcceptVisitor (this);
-            var is_ = isExpression.IsToken;
+			var is_ = isExpression.IsToken;
 			var exp = isExpression.Expression.AcceptVisitor (this);
 
-            return typ + " " + is_ + " " + exp;
+			return typ + " " + is_ + " " + exp;
 		}
 
 		public string VisitLambdaExpression (LambdaExpression lambdaExpression)
 		{
-            var args = new string[lambdaExpression.Parameters.Count];
-            int i = 0;
-            foreach (var p in lambdaExpression.Parameters) {
-                args[i] = p.ToString();
-                i++;
-            }
-            var lpar = "(";
-            var arg_ = string.Join(", ", args);
-            var rpar = ")";
-            var arrow = lambdaExpression.ArrowToken;
-            var body = lambdaExpression.Body.AcceptVisitor(this);
+			var args = new string[lambdaExpression.Parameters.Count];
+			int i = 0;
+			foreach (var p in lambdaExpression.Parameters) {
+				args[i] = p.ToString();
+				i++;
+			}
+			var lpar = "(";
+			var arg_ = string.Join(", ", args);
+			var rpar = ")";
+			var arrow = lambdaExpression.ArrowToken;
+			var body = lambdaExpression.Body.AcceptVisitor(this);
 
-            return lpar + arg_ + rpar + " " + arrow + " " + body;
+			return lpar + arg_ + rpar + " " + arrow + " " + body;
 		}
 
 		public string VisitMemberReferenceExpression (MemberReferenceExpression memberReferenceExpression)
 		{
-            var str = memberReferenceExpression.ToString();
-            var e = Evalueate(memberReferenceExpression, str);
-            return str;
+			var str = memberReferenceExpression.ToString();
+			var e = Evaluate(memberReferenceExpression, str);
+			if (!HasPublicValue(e))
+				throw EvaluationError("inaccessible member: {0}", memberReferenceExpression.MemberName);
+			else if (!HasPublicType(e))
+				throw EvaluationError("inaccessible type: {0}", ctx.Adapter.GetDisplayTypeName(ctx, e.Type));
+
+			var target = memberReferenceExpression.Target.AcceptVisitor(this);
+			var memberName = memberReferenceExpression.MemberName;
+
+			return target + "." + memberName;
+			// type argument.. 
 		}
 
 		public string VisitNamedArgumentExpression (NamedArgumentExpression namedArgumentExpression)
@@ -236,12 +344,12 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitObjectCreateExpression (ObjectCreateExpression objectCreateExpression)
 		{
-            throw NotSupported();
+			throw new NotImplementedException();
 			//OverloadResolve (cx, tm, ".ctor", null, types, true, false, false);
-            /*
+			/*
 
-			return objectCreateExpression.ToString ();
-			*/
+				return objectCreateExpression.ToString ();
+				*/
 		}
 
 		public string VisitAnonymousTypeCreateExpression (AnonymousTypeCreateExpression anonymousTypeCreateExpression)
@@ -251,11 +359,11 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitParenthesizedExpression (ParenthesizedExpression parenthesizedExpression)
 		{
-            var lpar = parenthesizedExpression.LParToken;
-            var exp = parenthesizedExpression.Expression.AcceptVisitor (this);
-            var rpar = parenthesizedExpression.RParToken;
+			var lpar = parenthesizedExpression.LParToken;
+			var exp = parenthesizedExpression.Expression.AcceptVisitor (this);
+			var rpar = parenthesizedExpression.RParToken;
 
-            return lpar + exp + rpar;
+			return lpar + exp + rpar;
 		}
 
 		public string VisitPointerReferenceExpression (PointerReferenceExpression pointerReferenceExpression)
@@ -281,25 +389,23 @@ namespace Mono.Debugging.Evaluation
 		public string VisitThisReferenceExpression (ThisReferenceExpression thisReferenceExpression)
 		{
 			var thisr = "this";
-			Tuple<string, object> generated;
-			if (localValues.TryGetValue (thisr, out generated))
-				return generated.Item1;
+			var localthis = GetLocalName(thisr);
+			if (localthis != null)
+				return localthis;
 
-            var vr = Evalueate (thisReferenceExpression, thisr);
-			var sym = GenerateSym (thisr);
-			generated = Tuple.Create (sym, vr.Value);
-			localValues.Add (thisr, generated);
-			return sym;
+			var vr = Evaluate(thisReferenceExpression, thisr);
+			localthis = AddToLocals(thisr, vr.Value, true);
+			return localthis;
 		}
 
 		public string VisitTypeOfExpression (TypeOfExpression typeOfExpression)
 		{
-            var typof = typeOfExpression.TypeOfToken.ToString();
-            var lpar = typeOfExpression.LParToken;
-            var typ = typeOfExpression.Type.AcceptVisitor(this);
-            var rpar = typeOfExpression.RParToken;
+			var typof = typeOfExpression.TypeOfToken.ToString();
+			var lpar = typeOfExpression.LParToken;
+			var typ = typeOfExpression.Type.AcceptVisitor(this);
+			var rpar = typeOfExpression.RParToken;
 
-            return typof + lpar + typ + rpar;
+			return typof + lpar + typ + rpar;
 		}
 
 		public string VisitTypeReferenceExpression (TypeReferenceExpression typeReferenceExpression)
@@ -309,13 +415,13 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitUnaryOperatorExpression (UnaryOperatorExpression unaryOperatorExpression)
 		{
-            var opType = unaryOperatorExpression.Operator;
-            var opSymbol = UnaryOperatorExpression.GetOperatorRole(opType);
-            var exp = unaryOperatorExpression.Expression.AcceptVisitor(this);
-            if (opType == UnaryOperatorType.PostIncrement || opType == UnaryOperatorType.PostDecrement)
-                return exp + opSymbol;
+			var opType = unaryOperatorExpression.Operator;
+			var opSymbol = UnaryOperatorExpression.GetOperatorRole(opType);
+			var exp = unaryOperatorExpression.Expression.AcceptVisitor(this);
+			if (opType == UnaryOperatorType.PostIncrement || opType == UnaryOperatorType.PostDecrement)
+				return exp + opSymbol;
 
-            return opSymbol + exp;
+			return opSymbol + exp;
 		}
 
 		public string VisitUncheckedExpression (UncheckedExpression uncheckedExpression)

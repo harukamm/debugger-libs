@@ -1371,6 +1371,11 @@ namespace Mono.Debugging.Evaluation
 			}
 		}
 
+        public virtual bool MaybeHasMethod(EvaluationContext ctx, object targetType, string methodName, BindingFlags flags, int paramLength)
+        {
+            throw new NotImplementedException();
+        }
+
 		public bool HasMethod (EvaluationContext ctx, object targetType, string methodName)
 		{
 			BindingFlags flags = BindingFlags.Instance | BindingFlags.Static;

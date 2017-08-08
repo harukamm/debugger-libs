@@ -14,6 +14,7 @@ namespace Mono.Debugging.Evaluation
 		readonly EvaluationContext ctx;
 		int count = 0;
 		Dictionary<string, Tuple<string, object>> localValues = new Dictionary<string, Tuple<string, object>> ();
+        List<string> lambdaParameter = new List<string>();
 
 		public NRefactoryLambdaBodyVisitor (EvaluationContext ctx)
 		{
@@ -94,7 +95,7 @@ namespace Mono.Debugging.Evaluation
 			} else if (!ExistsLocalName(name)) {
 				localName = name;
 			} else {
-				throw EvaluationError("");
+                throw EvaluationError("Cannot use variable named {0} inside lambda", name);
 			}
 
 			var pair = Tuple.Create(localName, val);
@@ -152,7 +153,7 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitAssignmentExpression (AssignmentExpression assignmentExpression)
 		{
-			throw NotSupported ();
+            throw EvaluationError("Not support assignment expression inside lambda");
 		}
 
 		public string VisitBaseReferenceExpression (BaseReferenceExpression baseReferenceExpression)
@@ -215,6 +216,9 @@ namespace Mono.Debugging.Evaluation
 		{
 			var identifier = identifierExpression.Identifier;
 
+            if (lambdaParameter.Contains(identifier))
+                return identifier;
+
 			var localid = GetLocalName(identifier);
 			if (localid != null)
 				return localid;
@@ -226,13 +230,21 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitIndexerExpression (IndexerExpression indexerExpression)
 		{
-			throw new NotImplementedException ();
+            var args = new string[indexerExpression.Arguments.Count];
+            var i = 0;
+            foreach(var arg in indexerExpression.Arguments) {
+                args[i] = arg.AcceptVisitor(this);
+                i++;
+            }
+            var target = indexerExpression.Target.AcceptVisitor(this);
+
+            return target + "[" + string.Join(", ", args) + "]";
 		}
 
 		public string VisitInvocationExpression (InvocationExpression invocationExpression)
 		{
 			var invocationTarget = invocationExpression.Target;
-			var argc = invocationExpression.Arguments.Count;
+			var argCount = invocationExpression.Arguments.Count;
 			string methodName;
 			var target = "";
 
@@ -245,6 +257,28 @@ namespace Mono.Debugging.Evaluation
 				target = method.Target.AcceptVisitor(this);
 				target = target + "." + methodName;
 
+				var e = Evaluate (method.Target, method.Target.ToString ());
+				var isStaticCall = e is TypeValueReference;
+				var vtyp = e.Type;
+
+				var hasInstanceMethod = ctx.Adapter.MaybeHasMethod (ctx, vtyp, methodName, BindingFlags.Instance, argCount);
+				var hasStaticMethod = ctx.Adapter.MaybeHasMethod (ctx, vtyp, methodName, BindingFlags.Static, argCount);
+				var flag = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
+				var hasPublicMethod = ctx.Adapter.MaybeHasMethod (ctx, vtyp, methodName, flag, argCount);
+
+				if ((hasInstanceMethod || hasStaticMethod) && !hasPublicMethod)
+					throw EvaluationError ("Only support public method invocation inside lambda");
+
+                if (isStaticCall && !hasStaticMethod) {
+					throw EvaluationError ("Not found static method {0}", methodName);
+                } else if (!isStaticCall && !hasInstanceMethod) {
+					throw EvaluationError ("Not found instance method {0}", methodName);
+                } else {
+					var linq = ctx.Adapter.GetType(ctx, "System.Linq.Enumerable");
+                    if (linq == null || !ctx.Adapter.MaybeHasMethod(ctx, vtyp, methodName, BindingFlags.Static, argCount + 1))
+                        throw EvaluationError("Not found instance method {0}", methodName);
+                }
+
 			} else if (invocationTarget is IdentifierExpression) {
 				var method = (IdentifierExpression)invocationTarget;
 				if (method.TypeArguments.Count != 0)
@@ -253,22 +287,33 @@ namespace Mono.Debugging.Evaluation
 				methodName = method.Identifier;
 				var vref = ctx.Adapter.GetThisReference(ctx);
 				var vtype = ctx.Adapter.GetEnclosingType(ctx);
-				var hasInstanceMethod = ctx.Adapter.HasMethod(ctx, vtype, methodName, BindingFlags.Instance);
-				var hasStaticMethod = ctx.Adapter.HasMethod(ctx, vtype, methodName, BindingFlags.Static);
-				var opt = "";
+				var hasInstanceMethod = ctx.Adapter.MaybeHasMethod(ctx, vtype, methodName, BindingFlags.Instance, argCount);
+				var hasStaticMethod = ctx.Adapter.MaybeHasMethod(ctx, vtype, methodName, BindingFlags.Static, argCount);
+				var flag = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
+				var hasPublicMethod = ctx.Adapter.MaybeHasMethod(ctx, vtype, methodName, flag, argCount);
+				string opt = null;
+
+                if ((hasInstanceMethod || hasStaticMethod) && !hasPublicMethod)
+                    throw EvaluationError("Only support public method invocation inside lambda");
 
 				if (vref == null && hasStaticMethod) {
 					var typeName = ctx.Adapter.GetTypeName(ctx, vtype);
 					opt = ctx.Adapter.GetDisplayTypeName(typeName);
 				} else if (vref != null && hasInstanceMethod){
 					if (hasStaticMethod) {
-						throw EvaluationError("Not supported.");
+						throw EvaluationError("Not supported instance & static ....");
 					}
 					opt = GetLocalName("this");
 					if (opt == null)
 						opt = AddToLocals("this", vref, true);
+				} else if (vref != null && hasStaticMethod) {
+					var typeName = ctx.Adapter.GetTypeName(ctx, vtype);
+					opt = ctx.Adapter.GetDisplayTypeName(typeName);
+				} else {
+					throw EvaluationError ("Not found method: {0}", methodName);
 				}
-				target = opt + "." + methodName;
+
+				target = (opt == null ? "" : opt + ".") + methodName;
 			} else {
 				throw NotSupportedToConsistency();
 			}
@@ -299,6 +344,7 @@ namespace Mono.Debugging.Evaluation
 			var args = new string[lambdaExpression.Parameters.Count];
 			int i = 0;
 			foreach (var p in lambdaExpression.Parameters) {
+                lambdaParameter.Add(p.Name); 
 				args[i] = p.ToString();
 				i++;
 			}
@@ -344,12 +390,23 @@ namespace Mono.Debugging.Evaluation
 
 		public string VisitObjectCreateExpression (ObjectCreateExpression objectCreateExpression)
 		{
-			throw new NotImplementedException();
-			//OverloadResolve (cx, tm, ".ctor", null, types, true, false, false);
-			/*
+            var typ = Evaluate(objectCreateExpression.Type, objectCreateExpression.Type.ToString());
+            var argc = objectCreateExpression.Arguments.Count;
+            var hasCtor = ctx.Adapter.MaybeHasMethod(ctx, typ.Type, ".ctor", BindingFlags.Instance, argc);
+            var hasPublicCtor = ctx.Adapter.MaybeHasMethod(ctx, typ.Type, ".ctor", BindingFlags.Instance | BindingFlags.Public, argc);
+            if (hasCtor && !hasPublicCtor)
+                throw EvaluationError("Only support public constructor");
+            else if (!hasCtor)
+                throw EvaluationError("not found constructor");
+            
+            var args = new string[argc];
+            var i = 0;
+            foreach(var arg in objectCreateExpression.Arguments) {
+                args[i] = arg.AcceptVisitor(this);
+                i++;
+            }
 
-				return objectCreateExpression.ToString ();
-				*/
+            return "new " + typ.Type + "(" + string.Join(", ", args) + ")";
 		}
 
 		public string VisitAnonymousTypeCreateExpression (AnonymousTypeCreateExpression anonymousTypeCreateExpression)

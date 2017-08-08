@@ -1689,6 +1689,39 @@ namespace Mono.Debugging.Soft
 			return tm != null ? tm.BaseType : null;
 		}
 
+		public override bool MaybeHasMethod(EvaluationContext ctx, object targetType, string methodName, BindingFlags flags, int paramLength)
+		{
+			var soft = (SoftEvaluationContext)ctx;
+			var currentType = ToTypeMirror(ctx, targetType);
+			bool allowInstance = (flags & BindingFlags.Instance) != 0;
+			bool allowStatic = (flags & BindingFlags.Static) != 0;
+			bool onlyPublic = (flags & BindingFlags.Public) != 0;
+
+            while (currentType != null)
+			{
+				var methods = GetMethodsByName(soft, currentType, methodName);
+
+				foreach (var method in methods) {
+						var parms = method.GetParameters();
+						if (parms.Length == paramLength && ((method.IsStatic && allowStatic) || (!method.IsStatic && allowInstance))) {
+							if (onlyPublic && !method.IsPublic)
+								continue;
+                            return true;
+						}
+				}
+
+                if (methodName == ".ctor")
+                    break;
+
+				if (currentType.BaseType == null && currentType.FullName != "System.Object")
+					currentType = soft.Adapter.GetType(soft, "System.Object") as TypeMirror;
+				else
+					currentType = currentType.BaseType;
+			}
+
+            return false;
+		}
+
 		public override bool HasMethod (EvaluationContext ctx, object targetType, string methodName, object[] genericTypeArgs, object[] argTypes, BindingFlags flags, out Tuple<int, object>[] resolvedLambdaTypes)
 		{
 			var soft = (SoftEvaluationContext) ctx;
@@ -2151,35 +2184,41 @@ namespace Mono.Debugging.Soft
 				throw new EvaluatorException ("Cannot resolve lambda param without delayed types");
 		}
 
+		public static MethodMirror[] GetMethodsByName (SoftEvaluationContext ctx, TypeMirror type, string methodName)
+		{
+			const BindingFlags flag = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+			MethodMirror[] methods = null;
+			var cache = ctx.Session.OverloadResolveCache;
+
+			if (ctx.CaseSensitive) {
+				lock (cache) {
+					cache.TryGetValue(Tuple.Create(type, methodName), out methods);
+				}
+			}
+
+			if (methods == null) {
+				if (type.VirtualMachine.Version.AtLeast(2, 7)) {
+					methods = type.GetMethodsByNameFlags(methodName, flag, !ctx.CaseSensitive);
+				} else				{
+					methods = type.GetMethods();
+				}
+
+				if (ctx.CaseSensitive) {
+					lock (cache) {
+						cache[Tuple.Create(type, methodName)] = methods;
+					}
+				}
+			}
+			return methods;
+		}
+
 		public static MethodMirror[] OverloadResolveMulti (SoftEvaluationContext ctx, TypeMirror type, string methodName, TypeMirror [] genericTypeArgs, TypeMirror returnType, object [] argTypes, bool allowInstance, bool allowStatic, bool throwIfNotFound, bool tryCasting, bool hasLambda = false)
 		{
-			const BindingFlags methodByNameFlags = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
-			var cache = ctx.Session.OverloadResolveCache;
 			var candidates = new List<MethodMirror> ();
 			var currentType = type;
 
 			while (currentType != null) {
-				MethodMirror [] methods = null;
-
-				if (ctx.CaseSensitive) {
-					lock (cache) {
-						cache.TryGetValue (Tuple.Create (currentType, methodName), out methods);
-					}
-				}
-
-				if (methods == null) {
-					if (currentType.VirtualMachine.Version.AtLeast (2, 7)) {
-						methods = currentType.GetMethodsByNameFlags (methodName, methodByNameFlags, !ctx.CaseSensitive);
-					} else {
-						methods = currentType.GetMethods ();
-					}
-
-					if (ctx.CaseSensitive) {
-						lock (cache) {
-							cache [Tuple.Create (currentType, methodName)] = methods;
-						}
-					}
-				}
+				MethodMirror [] methods = GetMethodsByName(ctx, currentType, methodName);
 
 				foreach (var method in methods) {
 					if (method.Name == methodName || (!ctx.CaseSensitive && method.Name.Equals (methodName, StringComparison.CurrentCultureIgnoreCase))) {

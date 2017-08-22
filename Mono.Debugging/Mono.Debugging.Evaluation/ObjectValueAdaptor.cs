@@ -421,6 +421,11 @@ namespace Mono.Debugging.Evaluation
 			return val;
 		}
 
+		public virtual object CreateDelayedLambdaValue (EvaluationContext ctx, string expression)
+		{
+			return null;
+		}
+
 		public virtual string[] GetImportedNamespaces (EvaluationContext ctx)
 		{
 			return new string[0];

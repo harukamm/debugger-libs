@@ -71,6 +71,8 @@ namespace MonoDevelop.Debugger.Tests.TestApp
 		}
 	}
 
+	public delegate int del (int x, int y);
+
 	class TestEvaluationParent
 	{
 		public int TestMethodBase ()
